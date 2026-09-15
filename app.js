@@ -1,5 +1,7 @@
 const DB_KEY = "maw3idi-clinic-db";
 const SESSION_KEY = "maw3idi-clinic-session";
+const API_BASE = "/api";
+let remoteDb = null;
 const seed = {
   users: [
     { id: 1, name: "مدير المستوصف", username: "admin", password: "admin123", role: "admin" },
@@ -19,8 +21,14 @@ const seed = {
     { id: 1, patientId: 1, date: "2026-09-09", time: "09:30", peopleAhead: 1, type: "عيادة عامة", status: "مؤكد", reminder: true }
   ]
 };
-const readDb = () => { const db = JSON.parse(localStorage.getItem(DB_KEY) || JSON.stringify(seed)); if (!db.doctors) db.doctors = seed.doctors; seed.doctors.forEach(doctor => { if (!db.doctors.some(existing => existing.id === doctor.id)) db.doctors.push(doctor); }); saveDb(db); return db; };
-const saveDb = db => localStorage.setItem(DB_KEY, JSON.stringify(db));
+async function readDb() {
+  if (remoteDb) return remoteDb;
+  const response = await fetch(`${API_BASE}/dashboard`);
+  if (!response.ok) throw new Error("تعذر الاتصال بالخادم");
+  remoteDb = await response.json();
+  return remoteDb;
+}
+const saveDb = () => { remoteDb = null; };
 const $ = selector => document.querySelector(selector);
 const today = () => new Date().toISOString().slice(0, 10);
 const formatDate = value => new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium" }).format(new Date(`${value}T00:00:00`));
@@ -28,10 +36,10 @@ function toast(message) {
   const el = $("#toast"); el.textContent = message; el.classList.add("show");
   setTimeout(() => el.classList.remove("show"), 3000);
 }
-function render() {
+async function render() {
   const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
   if (!session) return renderLanding();
-  renderDashboard(session);
+  try { await renderDashboard(session); } catch (error) { toast(error.message); }
 }
 function renderLanding() {
   $("#app").innerHTML = `<div class="landing">
@@ -51,16 +59,16 @@ function renderLogin(role) {
     <button class="primary full">تسجيل الدخول</button><div class="hint">تجريبيًا: ${role === "admin" ? "admin / admin123" : "staff / staff123"}</div>
   </form></div>`;
   $("#back").onclick = renderLanding;
-  $("#login-form").onsubmit = event => {
-    event.preventDefault(); const db = readDb();
-    const user = db.users.find(item => item.username === $("#username").value.trim() && item.password === $("#password").value && item.role === role);
-    if (!user) return toast("بيانات الدخول غير صحيحة");
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ id: user.id, name: user.name, role: user.role }));
+    $("#login-form").onsubmit = async event => {
+    event.preventDefault();
+    const response = await fetch(`${API_BASE}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("#username").value.trim(), password: $("#password").value, role }) });
+    if (!response.ok) return toast("بيانات الدخول غير صحيحة");
+    localStorage.setItem(SESSION_KEY, JSON.stringify(await response.json()));
     render();
   };
 }
-function renderDashboard(session, page = "home") {
-  const db = readDb(); const isAdmin = session.role === "admin";
+async function renderDashboard(session, page = "home") {
+  const db = await readDb(); const isAdmin = session.role === "admin";
   const patients = db.patients; const appointments = db.appointments;
   const nav = isAdmin ? `<button class="nav-btn ${page === "home" ? "active" : ""}" data-page="home">▦ لوحة المتابعة</button><button class="nav-btn ${page === "staff" ? "active" : ""}" data-page="staff">♙ الموظفون</button><button class="nav-btn ${page === "patients" ? "active" : ""}" data-page="patients">♡ المراجعون</button>` : `<button class="nav-btn ${page === "home" ? "active" : ""}" data-page="home">▦ لوحة المتابعة</button><button class="nav-btn ${page === "patients" ? "active" : ""}" data-page="patients">♡ المراجعون</button><button class="nav-btn ${page === "new" ? "active" : ""}" data-page="new">＋ موعد جديد</button>`;
   $("#app").innerHTML = `<div class="shell"><aside class="sidebar"><div class="logo">موعد<span>ي</span></div><div class="user-chip"><strong>${session.name}</strong><small>${isAdmin ? "مدير النظام" : "موظف استقبال"}</small></div><nav class="nav-list">${nav}</nav><button class="nav-btn" id="logout">↪ تسجيل الخروج</button></aside><section class="content"><div class="topbar"><div><h1>${pageTitle(page, isAdmin)}</h1><span class="date">${new Intl.DateTimeFormat("ar-SA", { dateStyle: "full" }).format(new Date())}</span></div>${!isAdmin && page === "home" ? '<button class="primary" id="new-appointment">＋ حجز موعد</button>' : ""}</div>${pageBody(page, db, isAdmin)}</section></div>`;
@@ -94,10 +102,10 @@ function appointmentForm(db) {
 }
 function appointmentEditForm(db, appointmentId) {
   const appointment = db.appointments.find(item => item.id === appointmentId);
-  if (!appointment) return `<div class="panel"><div class="empty">لم يتم العثور على الموعد</div></div>`;
+    if (!appointment) return `<div class="panel"><div class="empty">لم يتم العثور على الموعد</div></div>`;
   const doctorOptions = (db.doctors || seed.doctors).map(doctor => `<option value="${doctor.id}" ${doctor.id === appointment.doctorId ? "selected" : ""}>${doctor.name} - ${doctor.specialty}</option>`).join("");
   const patient = db.patients.find(item => item.id === appointment.patientId);
-  return `<div class="panel"><h2>تعديل موعد ${patient?.name || "المراجع"}</h2><form id="edit-appointment-form"><input type="hidden" name="id" value="${appointment.id}"><div class="form-grid"><div><label>تاريخ الموعد *</label><input name="date" required type="date" min="${today()}" value="${appointment.date || ""}"></div><div><label>فترة الحجز *</label><select name="period" required><option value="morning" ${appointment.period === "morning" ? "selected" : ""}>صباحية - 08:00 إلى 12:00</option><option value="evening" ${appointment.period === "evening" ? "selected" : ""}>مسائية - 16:00 إلى 22:00</option></select></div><div><label>رقم الدور التلقائي</label><output>${appointment.queueNumber || "-"}</output></div><div><label>الدكتور *</label><select name="doctorId" required>${doctorOptions}</select></div><div><label>اسم الدكتور يدويًا</label><input name="doctorName" value="${appointment.doctorName || ""}" placeholder="اختياري"></div><div><label>اسم العيادة يدويًا</label><input name="clinicName" value="${appointment.clinicName || ""}" placeholder="مثال: عيادة القلب"></div><div><label>نوع الزيارة</label><select name="type"><option ${appointment.type === "عيادة عامة" ? "selected" : ""}>عيادة عامة</option><option ${appointment.type === "طب الأطفال" ? "selected" : ""}>طب الأطفال</option><option ${appointment.type === "الأسنان" ? "selected" : ""}>الأسنان</option><option ${appointment.type === "عيادة النساء" ? "selected" : ""}>عيادة النساء</option><option ${appointment.type === "المختبر" ? "selected" : ""}>المختبر</option></select></div><div><label>حالة الموعد</label><select name="status"><option ${appointment.status === "مؤكد" ? "selected" : ""}>مؤكد</option><option ${appointment.status === "مكتمل" ? "selected" : ""}>مكتمل</option><option ${appointment.status === "ملغى" ? "selected" : ""}>ملغى</option></select></div></div><div class="form-actions"><button class="primary">حفظ التعديلات</button><button type="button" class="secondary" id="cancel-edit">إلغاء</button></div></form></div>`;
+      return `<div class="panel"><h2>تعديل موعد ${patient?.name || "المراجع"}</h2><form id="edit-appointment-form"><input type="hidden" name="id" value="${appointment.id}"><div class="form-grid"><div><label>تاريخ الموعد *</label><input name="date" required type="date" min="${today()}" value="${appointment.date || ""}"></div><div><label>فترة الحجز *</label><select name="period" required><option value="morning" ${appointment.period === "morning" ? "selected" : ""}>صباحية - 08:00 إلى 12:00</option><option value="evening" ${appointment.period === "evening" ? "selected" : ""}>مسائية - 16:00 إلى 22:00</option></select></div><div><label>رقم الدور التلقائي</label><output>${appointment.queueNumber || "-"}</output></div><div><label>الدكتور *</label><select name="doctorId" required>${doctorOptions}</select></div><div><label>اسم الدكتور يدويًا</label><input name="doctorName" value="${appointment.doctorName || ""}" placeholder="اختياري"></div><div><label>اسم العيادة يدويًا</label><input name="clinicName" value="${appointment.clinicName || ""}" placeholder="مثال: عيادة القلب"></div><div><label>نوع الزيارة</label><select name="type"><option ${appointment.type === "عيادة عامة" ? "selected" : ""}>عيادة عامة</option><option ${appointment.type === "طب الأطفال" ? "selected" : ""}>طب الأطفال</option><option ${appointment.type === "الأسنان" ? "selected" : ""}>الأسنان</option><option ${appointment.type === "عيادة النساء" ? "selected" : ""}>عيادة النساء</option><option ${appointment.type === "المختبر" ? "selected" : ""}>المختبر</option></select></div><div><label>حالة الموعد</label><select name="status"><option ${appointment.status === "مؤكد" ? "selected" : ""}>مؤكد</option><option ${appointment.status === "مكتمل" ? "selected" : ""}>مكتمل</option><option ${appointment.status === "ملغى" ? "selected" : ""}>ملغى</option></select></div></div><div class="form-actions"><button class="primary">حفظ التعديلات</button><button type="button" class="secondary" id="cancel-edit">إلغاء</button></div></form></div>`;
 }function patientTable(db, admin) {
   return `<div class="panel"><div class="section-title"><h2>قائمة المراجعين</h2>${!admin ? '<button class="primary" id="add-patient">＋ إضافة موعد</button>' : ""}</div><div class="table-wrap"><table><thead><tr><th>الاسم</th><th>الجوال</th><th>تاريخ الميلاد</th><th>الجنس</th><th>المواعيد</th></tr></thead><tbody>${db.patients.map(p => `<tr><td><strong>${p.name}</strong></td><td>${p.phone}</td><td>${formatDate(p.birth)}</td><td>${p.gender}</td><td>${db.appointments.filter(a => a.patientId === p.id).length}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">لا يوجد مراجعون</td></tr>'}</tbody></table></div></div>`;
 }
@@ -108,54 +116,54 @@ function staffForm() {
     <div><label>تاريخ الميلاد *</label><input name="birth" required type="date"></div>
     <div><label>اسم المستخدم *</label><input name="username" required autocomplete="username" placeholder="يستخدم لتسجيل الدخول"></div>
     <div><label>كلمة المرور *</label><input name="password" required type="password" minlength="6" autocomplete="new-password" placeholder="6 أحرف على الأقل"></div>
-  </div><div class="form-actions"><button class="primary">حفظ الموظف</button><button type="button" class="secondary" id="cancel-staff">إلغاء</button></div></form></div>`;
+    </div><div class="form-actions"><button class="primary">حفظ الموظف</button><button type="button" class="secondary" id="cancel-staff">إلغاء</button></div></form></div>`;
 }
 function staffTable(db) { const staff = db.users.filter(u => u.role === "staff"); return `<div class="panel"><div class="section-title"><h2>الموظفون</h2><button class="primary" id="add-staff">＋ إضافة موظف</button></div><div class="table-wrap"><table><thead><tr><th>الموظف</th><th>تاريخ الميلاد</th><th>الجوال</th><th>اسم المستخدم</th><th>الحالة</th></tr></thead><tbody>${staff.map(u => `<tr><td><strong>${u.name}</strong></td><td>${u.birth ? formatDate(u.birth) : "غير محدد"}</td><td>${u.phone || "غير محدد"}</td><td>${u.username}</td><td><span class="badge">نشط</span></td></tr>`).join("")}</tbody></table></div></div>`; }
-function confirmDoctorEntry(session, appointmentId) {
-  const db = readDb();
-  const appointment = db.appointments.find(item => item.id === appointmentId);
-  if (!appointment || appointment.status !== "مؤكد") return toast("لا يمكن تأكيد هذا الموعد");
-  appointment.peopleAhead = Math.max(0, Number(appointment.peopleAhead || 0) - 1);
-  appointment.status = "قيد الكشف";
-  appointment.doctorEnteredAt = new Date().toISOString();
-  saveDb(db);
-  toast(appointment.peopleAhead === 0 ? "حان دور المريض الآن" : `تم تأكيد دخول الدكتور، باقي ${appointment.peopleAhead} أشخاص`);
+async function confirmDoctorEntry(session, appointmentId) {
+  const response = await fetch(`${API_BASE}/appointments/${appointmentId}/confirm`, { method: "POST" });
+  const result = await response.json();
+  if (!response.ok) return toast(result.error || "لا يمكن تأكيد هذا الموعد");
+  const remaining = Number(result.appointment.peopleAhead || 0);
+  toast(remaining === 0 ? "حان دور المريض الآن" : `تم تأكيد دخول الدكتور، باقي ${remaining} أشخاص`);
+  remoteDb = null;
   renderDashboard(session, "home");
 }
 function bindPageEvents(session, page) {
   document.querySelectorAll(".edit-appointment").forEach(button => button.onclick = () => { sessionStorage.setItem("editAppointmentId", button.dataset.id); renderDashboard(session, "edit"); });
   document.querySelectorAll(".confirm-appointment").forEach(button => button.onclick = () => confirmDoctorEntry(session, Number(button.dataset.id)));
   if ($("#cancel-edit")) $("#cancel-edit").onclick = () => { sessionStorage.removeItem("editAppointmentId"); renderDashboard(session, "home"); };
-  if ($("#edit-appointment-form")) $("#edit-appointment-form").onsubmit = event => {
+  if ($("#edit-appointment-form")) $("#edit-appointment-form").onsubmit = async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
-    const db = readDb();
-    const appointment = db.appointments.find(item => item.id === Number(data.id));
-    if (!appointment) return toast("تعذر العثور على الموعد");
-    Object.assign(appointment, { date: data.date, period: data.period, time: data.period === "morning" ? "08:00" : "16:00", doctorId: Number(data.doctorId), doctorName: data.doctorName.trim(), clinicName: data.clinicName.trim(), type: data.type, status: data.status });
-    saveDb(db); sessionStorage.removeItem("editAppointmentId"); toast("تم تعديل الموعد بنجاح"); renderDashboard(session, "home");
+    const response = await fetch(`${API_BASE}/appointments/${data.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...data, doctorId: Number(data.doctorId) }) });
+    const result = await response.json();
+    if (!response.ok) return toast(result.error || "تعذر تعديل الموعد");
+    remoteDb = null; sessionStorage.removeItem("editAppointmentId"); toast("تم تعديل الموعد بنجاح"); renderDashboard(session, "home");
   };
   if ($("#add-staff")) $("#add-staff").onclick = () => renderDashboard(session, "staff-add");
   if ($("#cancel-staff")) $("#cancel-staff").onclick = () => renderDashboard(session, "staff");
-  if ($("#staff-form")) $("#staff-form").onsubmit = event => {
+  if ($("#staff-form")) $("#staff-form").onsubmit = async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
-    const db = readDb();
-    if (db.users.some(user => user.username.toLowerCase() === data.username.trim().toLowerCase())) return toast("اسم المستخدم مستخدم مسبقًا");
-    db.users.push({ id: Date.now(), name: data.name.trim(), birth: data.birth, phone: data.phone.trim(), username: data.username.trim(), password: data.password, role: "staff" });
-    saveDb(db);
+    const response = await fetch(`${API_BASE}/staff`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    const result = await response.json();
+    if (!response.ok) return toast(result.error || "تعذر إضافة الموظف");
+    remoteDb = null;
     toast("تمت إضافة الموظف بنجاح");
     renderDashboard(session, "staff");
   };
   if ($("#add-patient")) $("#add-patient").onclick = () => renderDashboard(session, "new");
   if ($("#cancel-form")) $("#cancel-form").onclick = () => renderDashboard(session, "home");
   if (!$("#appointment-form")) return;
-  $("#appointment-form").onsubmit = event => {
-    event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); const db = readDb();
-    let patient = db.patients.find(p => p.phone === data.phone);
-    if (!patient) { patient = { id: Date.now(), name: data.name, phone: data.phone, birth: data.birth, gender: data.gender, blood: data.blood, notes: data.notes }; db.patients.push(patient); }
-    const sameQueue = db.appointments.filter(item => item.date === data.date && item.period === data.period && item.doctorId === Number(data.doctorId) && item.status !== "ملغى"); if (sameQueue.length >= 40) return toast("اكتملت حجوزات هذه الفترة لهذا الدكتور"); const queueNumber = sameQueue.length + 1; db.appointments.push({ id: Date.now() + 1, patientId: patient.id, doctorId: Number(data.doctorId), doctorName: data.doctorName.trim(), clinicName: data.clinicName.trim(), date: data.date, period: data.period, time: data.period === "morning" ? "08:00" : "16:00", queueNumber, peopleAhead: sameQueue.length, type: data.type, status: "مؤكد", reminder: true });
-    saveDb(db); toast("تم حفظ الموعد وتفعيل التذكير حسب الدور"); renderDashboard(session, "home");
+  $("#appointment-form").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const response = await fetch(`${API_BASE}/appointments`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...data, doctorId: Number(data.doctorId) }) });
+    const result = await response.json();
+    if (!response.ok) return toast(result.error || "تعذر حفظ الموعد");
+    remoteDb = null;
+    toast(result.smsSent ? "تم حفظ الموعد وإرسال رسالة التذكير" : "تم حفظ الموعد، وتعذر إرسال الرسالة مؤقتًا");
+    renderDashboard(session, "home");
   };
 }
 function checkQueueReminders(db) {
