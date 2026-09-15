@@ -96,18 +96,18 @@ app.post("/api/appointments", async (req, res) => {
   const { name, phone, birth, gender, blood, notes, date, period, doctorId, doctorName, clinicName, type } = data;
   if (!name || !phone || !birth || !date || !period || !doctorId || !type) return res.status(400).json({ error: "البيانات المطلوبة ناقصة" });
   const { data: existingPatient, error: patientLookupError } = await supabase.from("patients").select("*").eq("phone", phone).maybeSingle();
-  if (patientLookupError) return res.status(500).json({ error: "تعذر قراءة بيانات المراجع" });
+  if (patientLookupError) return res.status(500).json({ error: `تعذر قراءة بيانات المراجع: ${patientLookupError.message}` });
   let patient = existingPatient;
   if (!patient) {
     const created = await supabase.from("patients").insert({ name, phone, birth, gender, blood, notes }).select().single();
-    if (created.error) return res.status(500).json({ error: "تعذر حفظ بيانات المراجع" });
+    if (created.error) return res.status(500).json({ error: `تعذر حفظ بيانات المراجع: ${created.error.message}` });
     patient = created.data;
   }
   const queue = await supabase.from("appointments").select("id", { count: "exact", head: true }).eq("appointment_date", date).eq("period", period).eq("doctor_id", doctorId).neq("status", "ملغى");
   if (queue.error) return res.status(500).json({ error: `تعذر حساب الدور: ${queue.error.message}` });
   if (queue.count >= 40) return res.status(409).json({ error: "اكتملت حجوزات هذه الفترة لهذا الدكتور" });
   const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: period === "morning" ? "08:00" : "16:00", queue_number: queue.count + 1, people_ahead: queue.count, type, status: "مؤكد" }).select("*").single();
-  if (appointment.error) return res.status(500).json({ error: "تعذر حفظ الموعد" });
+  if (appointment.error) return res.status(500).json({ error: `تعذر حفظ الموعد: ${appointment.error.message}` });
   let smsSent = false;
   try {
     await sendSms(phone, `موعدي: تم حجز موعدك بتاريخ ${date}، الدور رقم ${queue.count + 1}. سيتم تذكيرك عند اقتراب دورك.`);
