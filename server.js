@@ -9,7 +9,8 @@ import twilio from "twilio";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = Number(process.env.PORT || 10000);
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+const supabaseConfigured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+const supabase = supabaseConfigured ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY) : null;
 const sms = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
@@ -33,6 +34,7 @@ function verifyPassword(password, stored) {
   const [salt, expected] = String(stored || "").split(":");
   if (!salt || !expected) return false;
   const actual = crypto.scryptSync(password, salt, 64).toString("hex");
+  if (actual.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
 }
 
@@ -57,19 +59,24 @@ function appointmentForClient(appointment) {
 }
 
 app.get("/api/health", async (_req, res) => {
-  const configured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
-  if (!configured) return res.status(503).json({ ok: false, supabaseConfigured: false, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER) });
+  if (!supabaseConfigured) return res.status(503).json({ ok: false, supabaseConfigured: false, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), error: "أضف متغيرات Supabase في Render" });
   const { error } = await supabase.from("users").select("id").limit(1);
   res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), databaseError: error?.message });
 });
 
 app.post("/api/login", async (req, res) => {
-  const { username, password, role } = req.body || {};
-  const normalizedUsername = String(username || "").trim().toLowerCase();
-  const { data, error } = await supabase.from("users").select("id,name,username,password_hash,role").ilike("username", normalizedUsername).eq("role", role).maybeSingle();
-  if (error) return res.status(500).json({ error: `تعذر الاتصال بقاعدة البيانات: ${error.message}` });
-  if (!data || !verifyPassword(password, data.password_hash)) return res.status(401).json({ error: "بيانات الدخول غير صحيحة" });
-  res.json({ id: data.id, name: data.name, role: data.role });
+  if (!supabase) return res.status(503).json({ error: "الخادم غير مهيأ ببيانات Supabase" });
+  try {
+    const { username, password, role } = req.body || {};
+    const normalizedUsername = String(username || "").trim().toLowerCase();
+    const { data, error } = await supabase.from("users").select("id,name,username,password_hash,role").ilike("username", normalizedUsername).eq("role", role).maybeSingle();
+    if (error) return res.status(500).json({ error: `تعذر الاتصال بقاعدة البيانات: ${error.message}` });
+    if (!data || !verifyPassword(password, data.password_hash)) return res.status(401).json({ error: "بيانات الدخول غير صحيحة" });
+    res.json({ id: data.id, name: data.name, role: data.role });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({ error: "حدث خطأ أثناء تسجيل الدخول" });
+  }
 });
 
 app.get("/api/dashboard", async (_req, res) => {
