@@ -47,6 +47,7 @@ create table if not exists public.appointments (
 
 alter table public.appointments
   add column if not exists patient_id bigint,
+  add column if not exists patient_name text,
   add column if not exists doctor_id bigint,
   add column if not exists doctor_name text,
   add column if not exists clinic_name text,
