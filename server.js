@@ -174,7 +174,7 @@ app.post("/api/staff", async (req, res) => {
 });
 
 app.post("/api/reminders/run", async (req, res) => {
-  if (req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
+  if (!process.env.REMINDER_CRON_SECRET || req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase.from("appointments").select("id,patient_id,people_ahead,appointment_date,doctor_id,clinic_name").eq("status", "مؤكد").gte("appointment_date", today).is("reminder_sent_at", null).lte("people_ahead", 5).limit(50);
   if (error) return res.status(500).json({ error: "تعذر تحميل التذكيرات" });
