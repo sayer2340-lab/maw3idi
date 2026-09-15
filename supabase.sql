@@ -53,6 +53,8 @@ alter table public.appointments
   add column if not exists appointment_date date,
   add column if not exists period text,
   add column if not exists appointment_time time,
+  add column if not exists date date,
+  add column if not exists time time,
   add column if not exists queue_number integer,
   add column if not exists people_ahead integer default 0,
   add column if not exists type text,
