@@ -46,7 +46,17 @@ create table if not exists public.appointments (
 );
 
 alter table public.appointments
+  add column if not exists patient_id bigint,
+  add column if not exists doctor_id bigint,
+  add column if not exists doctor_name text,
+  add column if not exists clinic_name text,
+  add column if not exists appointment_date date,
+  add column if not exists period text,
   add column if not exists appointment_time time,
+  add column if not exists queue_number integer,
+  add column if not exists people_ahead integer default 0,
+  add column if not exists type text,
+  add column if not exists status text default 'مؤكد',
   add column if not exists reminder_sent_at timestamptz,
   add column if not exists doctor_entered_at timestamptz;
 
