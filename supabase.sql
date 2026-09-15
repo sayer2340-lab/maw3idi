@@ -45,8 +45,21 @@ create table if not exists public.appointments (
   created_at timestamptz not null default now()
 );
 
+alter table public.appointments
+  add column if not exists reminder_sent_at timestamptz,
+  add column if not exists doctor_entered_at timestamptz;
+
 create index if not exists appointments_reminders_idx
   on public.appointments (appointment_date, status, reminder_sent_at);
+
+insert into public.users (name, username, password_hash, role)
+values
+  ('مدير المستوصف', 'admin', '1129e68aa2e148740af33ae8bc9e78e1:274248eaa27a6b7ceff253005c09d87a4cadb94e169b4434aa3711e98f542a83b72de086293a155cf3d72f24d183780f8347343f36a08925451377fcf2b0124e', 'admin'),
+  ('سارة أحمد', 'staff', '9375b3e4d3ff728d23901031d2655343:b45c792cdb7b6fce6265954038b9dfd1606de785847047f1ffe0d24f4f098918b6db1a40204cfc282d293e718665e8320ab8e26477c0b7d103a5408f46c21e09', 'staff')
+on conflict (username) do update set
+  name = excluded.name,
+  password_hash = excluded.password_hash,
+  role = excluded.role;
 
 insert into public.doctors (name, specialty)
 select * from (values
