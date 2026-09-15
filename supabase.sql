@@ -46,6 +46,7 @@ create table if not exists public.appointments (
 );
 
 alter table public.appointments
+  add column if not exists appointment_time time,
   add column if not exists reminder_sent_at timestamptz,
   add column if not exists doctor_entered_at timestamptz;
 
