@@ -107,7 +107,7 @@ app.post("/api/appointments", async (req, res) => {
   if (queue.error) return res.status(500).json({ error: `تعذر حساب الدور: ${queue.error.message}` });
   if (queue.count >= 40) return res.status(409).json({ error: "اكتملت حجوزات هذه الفترة لهذا الدكتور" });
   const appointmentTime = period === "morning" ? "08:00" : "16:00";
-  const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: appointmentTime, date, time: appointmentTime, queue_number: queue.count + 1, people_ahead: queue.count, type, status: "مؤكد" }).select("*").single();
+  const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, patient_name: patient.name, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: appointmentTime, date, time: appointmentTime, queue_number: queue.count + 1, people_ahead: queue.count, type, status: "مؤكد" }).select("*").single();
   if (appointment.error) return res.status(500).json({ error: `تعذر حفظ الموعد: ${appointment.error.message}` });
   let smsSent = false;
   try {
