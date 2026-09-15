@@ -24,8 +24,11 @@ const seed = {
 async function readDb() {
   if (remoteDb) return remoteDb;
   const response = await fetch(`${API_BASE}/dashboard`);
-  if (!response.ok) throw new Error("تعذر الاتصال بالخادم");
-  remoteDb = await response.json();
+  const body = await response.text();
+  let result;
+  try { result = JSON.parse(body); } catch (_error) { result = {}; }
+  if (!response.ok) throw new Error(result.error || `تعذر تحميل البيانات (${response.status})`);
+  remoteDb = result;
   return remoteDb;
 }
 const saveDb = () => { remoteDb = null; };
