@@ -62,8 +62,9 @@ function renderLogin(role) {
     $("#login-form").onsubmit = async event => {
     event.preventDefault();
     const response = await fetch(`${API_BASE}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("#username").value.trim(), password: $("#password").value, role }) });
-    if (!response.ok) return toast("بيانات الدخول غير صحيحة");
-    localStorage.setItem(SESSION_KEY, JSON.stringify(await response.json()));
+    const result = await response.json();
+    if (!response.ok) return toast(result.error || "تعذر تسجيل الدخول");
+    localStorage.setItem(SESSION_KEY, JSON.stringify(result));
     render();
   };
 }
