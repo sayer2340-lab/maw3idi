@@ -16,7 +16,7 @@ const sms = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
   : null;
 
 app.use(express.json());
-app.use(express.static(__dirname));
+app.use(express.static(__dirname, { setHeaders: response => response.setHeader("Cache-Control", "no-store") }));
 
 function normalizePhone(phone) {
   const digits = String(phone || "").replace(/[^0-9+]/g, "");
