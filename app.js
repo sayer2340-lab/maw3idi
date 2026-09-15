@@ -61,11 +61,15 @@ function renderLogin(role) {
   $("#back").onclick = renderLanding;
     $("#login-form").onsubmit = async event => {
     event.preventDefault();
-    const response = await fetch(`${API_BASE}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("#username").value.trim(), password: $("#password").value, role }) });
-    const result = await response.json();
-    if (!response.ok) return toast(result.error || "تعذر تسجيل الدخول");
-    localStorage.setItem(SESSION_KEY, JSON.stringify(result));
-    render();
+    try {
+      const response = await fetch(`${API_BASE}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("#username").value.trim(), password: $("#password").value, role }) });
+      const result = await response.json();
+      if (!response.ok) return toast(result.error || "تعذر تسجيل الدخول");
+      localStorage.setItem(SESSION_KEY, JSON.stringify(result));
+      render();
+    } catch (_error) {
+      toast("تعذر الوصول إلى خادم الموقع");
+    }
   };
 }
 async function renderDashboard(session, page = "home") {
