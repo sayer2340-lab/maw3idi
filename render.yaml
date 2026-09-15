@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: maw3idi-clinic
+    name: maw3idi
     runtime: node
     buildCommand: npm install
     startCommand: npm start
@@ -37,4 +37,8 @@ services:
       - key: TWILIO_AUTH_TOKEN
         sync: false
       - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: RENDER_EXTERNAL_URL
+        sync: false
+      - key: REMINDER_CRON_SECRET
         sync: false
