@@ -56,12 +56,13 @@ function appointmentForClient(appointment) {
   };
 }
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+app.get("/api/health", (_req, res) => res.json({ ok: true, supabaseConfigured: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY), twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER) }));
 
 app.post("/api/login", async (req, res) => {
   const { username, password, role } = req.body || {};
-  const { data, error } = await supabase.from("users").select("id,name,username,password_hash,role").eq("username", username).eq("role", role).maybeSingle();
-  if (error) return res.status(500).json({ error: "تعذر الاتصال بقاعدة البيانات" });
+  const normalizedUsername = String(username || "").trim().toLowerCase();
+  const { data, error } = await supabase.from("users").select("id,name,username,password_hash,role").ilike("username", normalizedUsername).eq("role", role).maybeSingle();
+  if (error) return res.status(500).json({ error: `تعذر الاتصال بقاعدة البيانات: ${error.message}` });
   if (!data || !verifyPassword(password, data.password_hash)) return res.status(401).json({ error: "بيانات الدخول غير صحيحة" });
   res.json({ id: data.id, name: data.name, role: data.role });
 });
