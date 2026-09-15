@@ -43,6 +43,27 @@ async function sendSms(to, body) {
   return sms.messages.create({ body, from: process.env.TWILIO_PHONE_NUMBER, to: normalizePhone(to) });
 }
 
+async function sendNearTurnReminders(appointments) {
+  if (!appointments.length) return;
+  const patientIds = appointments.map(appointment => appointment.patient_id);
+  const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
+  if (patients.error) throw patients.error;
+  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
+  for (const appointment of appointments) {
+    const patient = patientsById.get(appointment.patient_id);
+    if (!patient?.phone) continue;
+    try {
+      const text = appointment.people_ahead === 0
+        ? `موعدي: حان دور ${patient.name} الآن.`
+        : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
+      await sendSms(patient.phone, text);
+      await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
+    } catch (error) {
+      console.error("Near-turn SMS error:", error.message);
+    }
+  }
+}
+
 function appointmentForClient(appointment) {
   return {
     ...appointment,
@@ -128,10 +149,19 @@ app.patch("/api/appointments/:id", async (req, res) => {
 });
 
 app.post("/api/appointments/:id/confirm", async (req, res) => {
-  const current = await supabase.from("appointments").select("people_ahead,status").eq("id", req.params.id).single();
+  const current = await supabase.from("appointments").select("id,people_ahead,status,appointment_date,date,period,doctor_id").eq("id", req.params.id).single();
   if (current.error || current.data.status !== "مؤكد") return res.status(409).json({ error: "لا يمكن تأكيد هذا الموعد" });
-  const { data: appointment, error } = await supabase.from("appointments").update({ people_ahead: Math.max(0, Number(current.data.people_ahead || 0) - 1), status: "قيد الكشف", doctor_entered_at: new Date().toISOString() }).eq("id", req.params.id).select("*").single();
+  const appointmentDate = current.data.appointment_date || current.data.date;
+  const { data: appointment, error } = await supabase.from("appointments").update({ status: "قيد الكشف", doctor_entered_at: new Date().toISOString() }).eq("id", req.params.id).select("*").single();
   if (error) return res.status(500).json({ error: "تعذر تحديث حالة الموعد" });
+  const waiting = await supabase.from("appointments").select("id,patient_id,people_ahead,reminder_sent_at").eq("appointment_date", appointmentDate).eq("period", current.data.period).eq("doctor_id", current.data.doctor_id).eq("status", "مؤكد").gt("people_ahead", 0);
+  if (!waiting.error) {
+    for (const next of waiting.data) {
+      await supabase.from("appointments").update({ people_ahead: Math.max(0, Number(next.people_ahead) - 1) }).eq("id", next.id);
+    }
+    const near = waiting.data.filter(next => !next.reminder_sent_at && Number(next.people_ahead) - 1 <= 5);
+    await sendNearTurnReminders(near);
+  }
   res.json({ appointment: appointmentForClient(appointment) });
 });
 
