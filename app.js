@@ -1,6 +1,6 @@
 const DB_KEY = "maw3idi-clinic-db";
 const SESSION_KEY = "maw3idi-clinic-session";
-const API_BASE = "/api";
+const API_BASE = `${window.location.origin}/api`;
 let remoteDb = null;
 const seed = {
   users: [
@@ -63,12 +63,14 @@ function renderLogin(role) {
     event.preventDefault();
     try {
       const response = await fetch(`${API_BASE}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("#username").value.trim(), password: $("#password").value, role }) });
-      const result = await response.json();
+      const body = await response.text();
+      let result;
+      try { result = JSON.parse(body); } catch (_error) { result = { error: `رد غير صالح من الخادم (${response.status})` }; }
       if (!response.ok) return toast(result.error || "تعذر تسجيل الدخول");
       localStorage.setItem(SESSION_KEY, JSON.stringify(result));
       render();
-    } catch (_error) {
-      toast("تعذر الوصول إلى خادم الموقع");
+    } catch (error) {
+      toast(`تعذر الوصول إلى خادم الموقع: ${error.message}`);
     }
   };
 }
