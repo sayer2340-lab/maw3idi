@@ -56,7 +56,12 @@ function appointmentForClient(appointment) {
   };
 }
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, supabaseConfigured: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY), twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER) }));
+app.get("/api/health", async (_req, res) => {
+  const configured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  if (!configured) return res.status(503).json({ ok: false, supabaseConfigured: false, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER) });
+  const { error } = await supabase.from("users").select("id").limit(1);
+  res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), databaseError: error?.message });
+});
 
 app.post("/api/login", async (req, res) => {
   const { username, password, role } = req.body || {};
