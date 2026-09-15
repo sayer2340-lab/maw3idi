@@ -11,4 +11,3 @@ ENV NODE_ENV=production
 EXPOSE 10000
 
 CMD ["npm", "start"]
-COPY package*.json ./
