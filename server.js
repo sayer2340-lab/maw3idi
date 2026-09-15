@@ -87,7 +87,7 @@ app.get("/api/dashboard", async (_req, res) => {
     supabase.from("users").select("id,name,username,role,phone,birth").eq("role", "staff")
   ]);
   const failed = [patients, appointments, doctors, users].find(result => result.error);
-  if (failed) return res.status(500).json({ error: "تعذر تحميل بيانات لوحة التحكم" });
+  if (failed) return res.status(500).json({ error: `تعذر تحميل بيانات لوحة التحكم: ${failed.error.message}` });
   res.json({ patients: patients.data, appointments: appointments.data.map(appointmentForClient), doctors: doctors.data, users: users.data });
 });
 
