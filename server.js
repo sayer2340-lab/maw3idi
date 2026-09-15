@@ -82,7 +82,7 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/dashboard", async (_req, res) => {
   const [patients, appointments, doctors, users] = await Promise.all([
     supabase.from("patients").select("*"),
-    supabase.from("appointments").select("*").order("appointment_date").order("appointment_time"),
+    supabase.from("appointments").select("*").order("appointment_date"),
     supabase.from("doctors").select("*").order("name"),
     supabase.from("users").select("id,name,username,role,phone,birth").eq("role", "staff")
   ]);
