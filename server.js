@@ -59,7 +59,9 @@ async function sendNearTurnReminders(appointments) {
     const patient = patientsById.get(appointment.patient_id);
     if (!patient?.phone) continue;
     try {
-      const text = appointment.people_ahead === 0 ? `موعدي: حان دور ${patient.name} الآن.` : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
+      const text = appointment.people_ahead === 0
+        ? `موعدي: حان دور ${patient.name} الآن.`
+        : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
       await sendSms(patient.phone, text);
       await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
     } catch (error) {
@@ -68,20 +70,20 @@ async function sendNearTurnReminders(appointments) {
   }
 }
 
-function appointmentForClient(appointment, patient) {
+function appointmentForClient(appointment = {}) {
   return {
     ...appointment,
-    patientId: appointment.patient_id,
-    doctorId: appointment.doctor_id,
-    doctorName: appointment.doctor_name,
-    clinicName: appointment.clinic_name,
-    date: appointment.appointment_date || appointment.date,
-    time: appointment.appointment_time || appointment.time,
-    queueNumber: appointment.queue_number,
-    peopleAhead: Number(appointment.people_ahead || 0),
-    reminder: Boolean(appointment.reminder_sent_at),
-    patientName: patient?.name || appointment.patient_name || "مراجع",
-    patientPhone: patient?.phone || appointment.phone || ""
+    patientId: appointment.patient_id ?? appointment.patientId ?? null,
+    patientName: appointment.patient_name ?? appointment.patientName ?? null,
+    patientPhone: appointment.phone ?? appointment.patientPhone ?? null,
+    doctorId: appointment.doctor_id ?? appointment.doctorId ?? null,
+    doctorName: appointment.doctor_name ?? appointment.doctorName ?? null,
+    clinicName: appointment.clinic_name ?? appointment.clinicName ?? null,
+    date: appointment.appointment_date ?? appointment.date ?? null,
+    time: appointment.appointment_time ?? appointment.time ?? null,
+    queueNumber: appointment.queue_number ?? appointment.queueNumber ?? null,
+    peopleAhead: appointment.people_ahead ?? appointment.peopleAhead ?? 0,
+    reminder: Boolean(appointment.reminder_sent_at ?? appointment.reminder)
   };
 }
 
@@ -115,15 +117,14 @@ app.get("/api/dashboard", async (_req, res) => {
   ]);
   const failed = [patients, appointments, doctors, users].find(result => result.error);
   if (failed) return res.status(500).json({ error: `تعذر تحميل بيانات لوحة التحكم: ${failed.error.message}` });
-  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
-  res.json({ patients: patients.data, appointments: appointments.data.map(appointment => appointmentForClient(appointment, patientsById.get(appointment.patient_id))), doctors: doctors.data, users: users.data });
+  res.json({ patients: patients.data, appointments: appointments.data.map(appointmentForClient), doctors: doctors.data, users: users.data });
 });
 
 app.post("/api/appointments", async (req, res) => {
   const data = req.body || {};
   const { name, phone, birth, gender, blood, notes, date, period, doctorId, doctorName, clinicName, type } = data;
   if (!name || !phone || !birth || !date || !period || !doctorId || !type) return res.status(400).json({ error: "البيانات المطلوبة ناقصة" });
-  const { data: existingPatient, error: patientLookupError } = await supabase.from("patients").select("*").eq("phone", phone).eq("name", name.trim()).maybeSingle();
+  const { data: existingPatient, error: patientLookupError } = await supabase.from("patients").select("*").eq("phone", phone).maybeSingle();
   if (patientLookupError) return res.status(500).json({ error: `تعذر قراءة بيانات المراجع: ${patientLookupError.message}` });
   let patient = existingPatient;
   if (!patient) {
@@ -144,7 +145,7 @@ app.post("/api/appointments", async (req, res) => {
   } catch (error) {
     console.error("SMS error:", error.message);
   }
-  res.status(201).json({ appointment: appointment.data, smsSent });
+  res.status(201).json({ appointment: appointmentForClient(appointment.data), smsSent });
 });
 
 app.patch("/api/appointments/:id", async (req, res) => {
@@ -166,7 +167,8 @@ app.post("/api/appointments/:id/confirm", async (req, res) => {
     for (const next of waiting.data) {
       await supabase.from("appointments").update({ people_ahead: Math.max(0, Number(next.people_ahead) - 1) }).eq("id", next.id);
     }
-    await sendNearTurnReminders(waiting.data.filter(next => !next.reminder_sent_at && Number(next.people_ahead) - 1 <= 5));
+    const near = waiting.data.filter(next => !next.reminder_sent_at && Number(next.people_ahead) - 1 <= 5);
+    await sendNearTurnReminders(near);
   }
   res.json({ appointment: appointmentForClient(appointment) });
 });
@@ -180,15 +182,17 @@ app.post("/api/staff", async (req, res) => {
 });
 
 app.post("/api/reminders/run", async (req, res) => {
-  if (req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
+  if (!process.env.REMINDER_CRON_SECRET || req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase.from("appointments").select("id,patient_id,people_ahead,appointment_date,doctor_id,clinic_name").eq("status", "مؤكد").gte("appointment_date", today).is("reminder_sent_at", null).lte("people_ahead", 5).limit(50);
-  if (error) return res.status(500).json({ error: "تعذر تحميل التذكيرات" });
+  if (error) return res.status(500).json({ error: `تعذر تحميل التذكيرات: ${error.message}` });
   const patientIds = data.map(appointment => appointment.patient_id);
   const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
-  if (patients.error) return res.status(500).json({ error: "تعذر تحميل بيانات المراجعين للتذكير" });
+  if (patients.error) return res.status(500).json({ error: `تعذر تحميل بيانات المراجعين للتذكير: ${patients.error.message}` });
   const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
   let sent = 0;
+  let failed = 0;
+  const failures = [];
   for (const appointment of data) {
     try {
       const patient = patientsById.get(appointment.patient_id);
@@ -198,10 +202,12 @@ app.post("/api/reminders/run", async (req, res) => {
       await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
       sent += 1;
     } catch (error) {
+      failed += 1;
+      failures.push({ appointmentId: appointment.id, error: error.message });
       console.error("Reminder error:", error.message);
     }
   }
-  res.json({ sent });
+  res.json({ sent, candidates: data.length, failed, failures });
 });
 
 app.listen(port, () => console.log(`Maw3idi server listening on ${port}`));
