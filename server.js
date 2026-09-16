@@ -145,13 +145,15 @@ app.post("/api/appointments", async (req, res) => {
   const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, patient_name: patient.name, phone: patient.phone, birth: patient.birth, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: appointmentTime, date, time: appointmentTime, queue_number: queue.count + 1, people_ahead: queue.count, type, status: "مؤكد" }).select("*").single();
   if (appointment.error) return res.status(500).json({ error: `تعذر حفظ الموعد: ${appointment.error.message}` });
   let smsSent = false;
+  let smsError = null;
   try {
     await sendSms(phone, `موعدي: تم حجز موعدك بتاريخ ${date}، الدور رقم ${queue.count + 1}. سيتم تذكيرك عند اقتراب دورك.`);
     smsSent = true;
   } catch (error) {
+    smsError = error.message;
     console.error("SMS error:", error.message);
   }
-  res.status(201).json({ appointment: appointmentForClient(appointment.data), smsSent });
+  res.status(201).json({ appointment: appointmentForClient(appointment.data), smsSent, smsError });
 });
 
 app.patch("/api/appointments/:id", async (req, res) => {
