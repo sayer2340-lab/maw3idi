@@ -95,11 +95,12 @@ function pageBody(page, db, admin) {
   if (page === "staff-add") return staffForm();
   if (page === "edit") return appointmentEditForm(db, Number(sessionStorage.getItem("editAppointmentId")));
   if (page === "staff") return staffTable(db);
-  const upcoming = Array.from(new Map(db.appointments
+  const activeAppointments = db.appointments.filter(a => a.status === "مؤكد");
+  const upcoming = Array.from(new Map(activeAppointments
     .filter(a => a.date >= today() && a.status === "مؤكد")
     .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
     .map(appointment => [appointment.patientId, appointment])).values()).slice(0, 5);
-  return `<div class="stats"><div class="stat"><small>مواعيد اليوم</small><strong>${db.appointments.filter(a => a.date === today()).length}</strong></div><div class="stat"><small>إجمالي المراجعين</small><strong>${db.patients.length}</strong></div><div class="stat"><small>مواعيد قادمة</small><strong class="accent">${db.appointments.filter(a => a.date >= today()).length}</strong></div><div class="stat"><small>قائمة الانتظار النشطة</small><strong>${db.appointments.filter(a => a.status === "مؤكد" && a.date >= today()).length}</strong></div><div class="stat"><small>الموظفون</small><strong>${db.users.filter(u => u.role === "staff").length}</strong></div></div><div class="grid-2"><div class="panel"><div class="section-title"><h2>المواعيد القادمة</h2><span class="badge">${upcoming.length} مواعيد</span></div>${upcoming.length ? upcoming.map(a => { const p = { name: a.patientName, phone: a.patientPhone }; const doctor = (db.doctors || []).find(x => x.id === a.doctorId); return `<div class="appointment"><div><strong>${a.patientName || "مراجع"}</strong><small>${formatDate(a.date)} · الفترة ${a.period === "morning" ? "الصباحية 08:00 - 12:00" : "المسائية 16:00 - 22:00"} · الدور ${a.queueNumber || "-"} · باقي ${a.peopleAhead || "0"} أشخاص · ${a.type} · ${a.clinicName || "عيادة غير محددة"} · ${a.doctorName || doctor?.name || "طبيب غير محدد"}</small></div><div><span class="badge">${a.status}</span>${!admin && a.status === "مؤكد" ? `<button class="primary confirm-appointment" data-id="${a.id}" type="button">تأكيد دخول الدكتور</button>` : ""}${Number(a.peopleAhead) <= 5 && p.phone ? `<a class="secondary whatsapp-reminder" target="_blank" rel="noopener" data-id="${a.id}" href="${whatsappLink(a, p)}">واتساب</a>` : ""}<button class="secondary edit-appointment" data-id="${a.id}" type="button">تعديل</button></div></div>`; }).join("") : '<div class="empty">لا توجد مواعيد قادمة</div>'}</div><div class="panel"><h2>تذكيرات النظام</h2><p>يتم حساب التذكير حسب الدور، ويظهر التنبيه عندما يتبقى للمراجع 5 أشخاص أو أقل.</p><div class="appointment"><div><strong>التذكير التلقائي</strong><small>مفعل لجميع المواعيد</small></div><span class="badge">مفعل</span></div></div></div>`;
+  return `<div class="stats"><div class="stat"><small>مواعيد اليوم</small><strong>${activeAppointments.filter(a => a.date === today()).length}</strong></div><div class="stat"><small>إجمالي المراجعين</small><strong>${db.patients.length}</strong></div><div class="stat"><small>مواعيد قادمة</small><strong class="accent">${activeAppointments.filter(a => a.date >= today()).length}</strong></div><div class="stat"><small>قائمة الانتظار النشطة</small><strong>${activeAppointments.filter(a => a.date >= today()).length}</strong></div><div class="stat"><small>الموظفون</small><strong>${db.users.filter(u => u.role === "staff").length}</strong></div></div><div class="grid-2"><div class="panel"><div class="section-title"><h2>المواعيد القادمة</h2><span class="badge">${upcoming.length} مواعيد</span></div>${upcoming.length ? upcoming.map(a => { const p = { name: a.patientName, phone: a.patientPhone }; const doctor = (db.doctors || []).find(x => x.id === a.doctorId); return `<div class="appointment"><div><strong>${a.patientName || "مراجع"}</strong><small>${formatDate(a.date)} · الفترة ${a.period === "morning" ? "الصباحية 08:00 - 12:00" : "المسائية 16:00 - 22:00"} · الدور ${a.queueNumber || "-"} · باقي ${a.peopleAhead || "0"} أشخاص · ${a.type} · ${a.clinicName || "عيادة غير محددة"} · ${a.doctorName || doctor?.name || "طبيب غير محدد"}</small></div><div><span class="badge">${a.status}</span>${!admin && a.status === "مؤكد" ? `<button class="primary confirm-appointment" data-id="${a.id}" type="button">تأكيد دخول الدكتور</button>` : ""}${Number(a.peopleAhead) <= 5 && p.phone ? `<a class="secondary whatsapp-reminder" target="_blank" rel="noopener" data-id="${a.id}" href="${whatsappLink(a, p)}">واتساب</a>` : ""}<button class="secondary edit-appointment" data-id="${a.id}" type="button">تعديل</button></div></div>`; }).join("") : '<div class="empty">لا توجد مواعيد قادمة</div>'}</div><div class="panel"><h2>تذكيرات النظام</h2><p>يتم حساب التذكير حسب الدور، ويظهر التنبيه عندما يتبقى للمراجع 5 أشخاص أو أقل.</p><div class="appointment"><div><strong>التذكير التلقائي</strong><small>مفعل لجميع المواعيد</small></div><span class="badge">مفعل</span></div></div></div>`;
 }
 function whatsappLink(appointment, patient) {
   let phone = String(patient.phone || "").replace(/[^0-9]/g, "");
@@ -168,6 +169,16 @@ function bindPageEvents(session, page) {
   if ($("#add-patient")) $("#add-patient").onclick = () => renderDashboard(session, "new");
   if ($("#cancel-form")) $("#cancel-form").onclick = () => renderDashboard(session, "home");
   if (!$("#appointment-form")) return;
+  const updateCapacity = () => {
+    const form = $("#appointment-form");
+    const date = form.elements.date.value;
+    const period = form.elements.period.value;
+    const doctorId = Number(form.elements.doctorId.value);
+    const booked = db.appointments.filter(appointment => appointment.date === date && appointment.period === period && appointment.doctorId === doctorId && appointment.status === "مؤكد").length;
+    $("#capacity-output").value = `${Math.max(0, 40 - booked)} مراجعًا`;
+  };
+  [$("#appointment-form").elements.date, $("#appointment-form").elements.period, $("#appointment-form").elements.doctorId].forEach(field => field.addEventListener("change", updateCapacity));
+  updateCapacity();
   $("#appointment-form").onsubmit = async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
