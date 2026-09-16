@@ -175,7 +175,7 @@ function bindPageEvents(session, page) {
     const period = form.elements.period.value;
     const doctorId = Number(form.elements.doctorId.value);
     const booked = db.appointments.filter(appointment => appointment.date === date && appointment.period === period && appointment.doctorId === doctorId && appointment.status === "مؤكد").length;
-    $("#capacity-output").value = `${Math.max(0, 40 - booked)} مراجعًا`;
+    $("#capacity-output").textContent = `${Math.max(0, 40 - booked)} مراجعًا`;
   };
   [$("#appointment-form").elements.date, $("#appointment-form").elements.period, $("#appointment-form").elements.doctorId].forEach(field => field.addEventListener("change", updateCapacity));
   updateCapacity();
