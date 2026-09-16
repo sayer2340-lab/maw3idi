@@ -68,7 +68,7 @@ async function sendNearTurnReminders(appointments) {
   }
 }
 
-function appointmentForClient(appointment) {
+function appointmentForClient(appointment, patient) {
   return {
     ...appointment,
     patientId: appointment.patient_id,
@@ -79,7 +79,9 @@ function appointmentForClient(appointment) {
     time: appointment.appointment_time,
     queueNumber: appointment.queue_number,
     peopleAhead: appointment.people_ahead,
-    reminder: Boolean(appointment.reminder_sent_at)
+    reminder: Boolean(appointment.reminder_sent_at),
+    patientName: patient?.name || appointment.patient_name || "مراجع",
+    patientPhone: patient?.phone || appointment.phone || ""
   };
 }
 
@@ -113,7 +115,8 @@ app.get("/api/dashboard", async (_req, res) => {
   ]);
   const failed = [patients, appointments, doctors, users].find(result => result.error);
   if (failed) return res.status(500).json({ error: `تعذر تحميل بيانات لوحة التحكم: ${failed.error.message}` });
-  res.json({ patients: patients.data, appointments: appointments.data.map(appointmentForClient), doctors: doctors.data, users: users.data });
+  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
+  res.json({ patients: patients.data, appointments: appointments.data.map(appointment => appointmentForClient(appointment, patientsById.get(appointment.patient_id))), doctors: doctors.data, users: users.data });
 });
 
 app.post("/api/appointments", async (req, res) => {
