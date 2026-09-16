@@ -206,7 +206,7 @@ function bindPageEvents(session, page, db) {
     const result = await response.json();
     if (!response.ok) return toast(result.error || "تعذر حفظ الموعد");
     remoteDb = null;
-    toast(result.smsSent ? "تم حفظ الموعد وإرسال رسالة التذكير" : "تم حفظ الموعد، وتعذر إرسال الرسالة مؤقتًا");
+    toast(result.smsSent ? "تم حفظ الموعد وإرسال رسالة التذكير" : `تم حفظ الموعد، لكن فشل الإرسال: ${result.smsError || "تحقق من إعدادات Twilio"}`);
     renderDashboard(session, "home");
   };
 }
