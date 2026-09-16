@@ -59,9 +59,7 @@ async function sendNearTurnReminders(appointments) {
     const patient = patientsById.get(appointment.patient_id);
     if (!patient?.phone) continue;
     try {
-      const text = appointment.people_ahead === 0
-        ? `موعدي: حان دور ${patient.name} الآن.`
-        : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
+      const text = appointment.people_ahead === 0 ? `موعدي: حان دور ${patient.name} الآن.` : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
       await sendSms(patient.phone, text);
       await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
     } catch (error) {
@@ -122,7 +120,7 @@ app.post("/api/appointments", async (req, res) => {
   const data = req.body || {};
   const { name, phone, birth, gender, blood, notes, date, period, doctorId, doctorName, clinicName, type } = data;
   if (!name || !phone || !birth || !date || !period || !doctorId || !type) return res.status(400).json({ error: "البيانات المطلوبة ناقصة" });
-  const { data: existingPatient, error: patientLookupError } = await supabase.from("patients").select("*").eq("phone", phone).maybeSingle();
+  const { data: existingPatient, error: patientLookupError } = await supabase.from("patients").select("*").eq("phone", phone).eq("name", name.trim()).maybeSingle();
   if (patientLookupError) return res.status(500).json({ error: `تعذر قراءة بيانات المراجع: ${patientLookupError.message}` });
   let patient = existingPatient;
   if (!patient) {
@@ -165,8 +163,7 @@ app.post("/api/appointments/:id/confirm", async (req, res) => {
     for (const next of waiting.data) {
       await supabase.from("appointments").update({ people_ahead: Math.max(0, Number(next.people_ahead) - 1) }).eq("id", next.id);
     }
-    const near = waiting.data.filter(next => !next.reminder_sent_at && Number(next.people_ahead) - 1 <= 5);
-    await sendNearTurnReminders(near);
+    await sendNearTurnReminders(waiting.data.filter(next => !next.reminder_sent_at && Number(next.people_ahead) - 1 <= 5));
   }
   res.json({ appointment: appointmentForClient(appointment) });
 });
@@ -180,17 +177,15 @@ app.post("/api/staff", async (req, res) => {
 });
 
 app.post("/api/reminders/run", async (req, res) => {
-  if (!process.env.REMINDER_CRON_SECRET || req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
+  if (req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase.from("appointments").select("id,patient_id,people_ahead,appointment_date,doctor_id,clinic_name").eq("status", "مؤكد").gte("appointment_date", today).is("reminder_sent_at", null).lte("people_ahead", 5).limit(50);
-  if (error) return res.status(500).json({ error: `تعذر تحميل التذكيرات: ${error.message}` });
+  if (error) return res.status(500).json({ error: "تعذر تحميل التذكيرات" });
   const patientIds = data.map(appointment => appointment.patient_id);
   const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
-  if (patients.error) return res.status(500).json({ error: `تعذر تحميل بيانات المراجعين للتذكير: ${patients.error.message}` });
+  if (patients.error) return res.status(500).json({ error: "تعذر تحميل بيانات المراجعين للتذكير" });
   const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
   let sent = 0;
-  let failed = 0;
-  const failures = [];
   for (const appointment of data) {
     try {
       const patient = patientsById.get(appointment.patient_id);
@@ -200,12 +195,10 @@ app.post("/api/reminders/run", async (req, res) => {
       await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
       sent += 1;
     } catch (error) {
-      failed += 1;
-      failures.push({ appointmentId: appointment.id, error: error.message });
       console.error("Reminder error:", error.message);
     }
   }
-  res.json({ sent, candidates: data.length, failed, failures });
+  res.json({ sent });
 });
 
 app.listen(port, () => console.log(`Maw3idi server listening on ${port}`));
