@@ -34,6 +34,21 @@ async function readDb() {
 const saveDb = () => { remoteDb = null; };
 const $ = selector => document.querySelector(selector);
 const today = () => new Date().toISOString().slice(0, 10);
+const normalizeAppointment = (appointment = {}) => ({
+  ...appointment,
+  patientId: appointment.patientId ?? appointment.patient_id ?? null,
+  patientName: appointment.patientName ?? appointment.patient_name ?? null,
+  patientPhone: appointment.patientPhone ?? appointment.phone ?? null,
+  doctorId: appointment.doctorId ?? appointment.doctor_id ?? null,
+  doctorName: appointment.doctorName ?? appointment.doctor_name ?? null,
+  clinicName: appointment.clinicName ?? appointment.clinic_name ?? null,
+  date: appointment.date ?? appointment.appointment_date ?? null,
+  time: appointment.time ?? appointment.appointment_time ?? null,
+  queueNumber: appointment.queueNumber ?? appointment.queue_number ?? null,
+  peopleAhead: Number(appointment.peopleAhead ?? appointment.people_ahead ?? 0),
+  status: appointment.status ?? "مؤكد",
+  period: appointment.period ?? "morning"
+});
 const formatDate = value => new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium" }).format(new Date(`${value}T00:00:00`));
 function toast(message) {
   const el = $("#toast"); el.textContent = message; el.classList.add("show");
@@ -79,14 +94,15 @@ function renderLogin(role) {
 }
 async function renderDashboard(session, page = "home") {
   const db = await readDb(); const isAdmin = session.role === "admin";
-  const patients = db.patients; const appointments = db.appointments;
+  const patients = (db.patients || []).map(patient => ({ ...patient }));
+  const appointments = (db.appointments || []).map(normalizeAppointment);
   const nav = isAdmin ? `<button class="nav-btn ${page === "home" ? "active" : ""}" data-page="home">▦ لوحة المتابعة</button><button class="nav-btn ${page === "staff" ? "active" : ""}" data-page="staff">♙ الموظفون</button><button class="nav-btn ${page === "patients" ? "active" : ""}" data-page="patients">♡ المراجعون</button>` : `<button class="nav-btn ${page === "home" ? "active" : ""}" data-page="home">▦ لوحة المتابعة</button><button class="nav-btn ${page === "patients" ? "active" : ""}" data-page="patients">♡ المراجعون</button><button class="nav-btn ${page === "new" ? "active" : ""}" data-page="new">＋ موعد جديد</button>`;
-  $("#app").innerHTML = `<div class="shell"><aside class="sidebar"><div class="logo">موعد<span>ي</span></div><div class="user-chip"><strong>${session.name}</strong><small>${isAdmin ? "مدير النظام" : "موظف استقبال"}</small></div><nav class="nav-list">${nav}</nav><button class="nav-btn" id="logout">↪ تسجيل الخروج</button></aside><section class="content"><div class="topbar"><div><h1>${pageTitle(page, isAdmin)}</h1><span class="date">${new Intl.DateTimeFormat("ar-SA", { dateStyle: "full" }).format(new Date())}</span></div>${!isAdmin && page === "home" ? '<button class="primary" id="new-appointment">＋ حجز موعد</button>' : ""}</div>${pageBody(page, db, isAdmin)}</section></div>`;
+  $("#app").innerHTML = `<div class="shell"><aside class="sidebar"><div class="logo">موعد<span>ي</span></div><div class="user-chip"><strong>${session.name}</strong><small>${isAdmin ? "مدير النظام" : "موظف استقبال"}</small></div><nav class="nav-list">${nav}</nav><button class="nav-btn" id="logout">↪ تسجيل الخروج</button></aside><section class="content"><div class="topbar"><div><h1>${pageTitle(page, isAdmin)}</h1><span class="date">${new Intl.DateTimeFormat("ar-SA", { dateStyle: "full" }).format(new Date())}</span></div>${!isAdmin && page === "home" ? '<button class="primary" id="new-appointment">＋ حجز موعد</button>' : ""}</div>${pageBody(page, { ...db, patients, appointments }, isAdmin)}</section></div>`;
   $("#logout").onclick = () => { localStorage.removeItem(SESSION_KEY); render(); };
   document.querySelectorAll("[data-page]").forEach(button => button.onclick = () => renderDashboard(session, button.dataset.page));
   if ($("#new-appointment")) $("#new-appointment").onclick = () => renderDashboard(session, "new");
-  bindPageEvents(session, page);
-  checkQueueReminders(db);
+  bindPageEvents(session, page, { ...db, patients, appointments });
+  checkQueueReminders({ ...db, patients, appointments });
 }
 const pageTitle = (page, admin) => page === "home" ? "صباح الخير، " + (admin ? "مدير المستوصف" : "فريق الاستقبال") : page === "new" ? "حجز موعد جديد" : page === "patients" ? "سجل المراجعين" : page === "staff-add" ? "إضافة موظف جديد" : page === "edit" ? "تعديل الموعد" : "إدارة الموظفين";
 function pageBody(page, db, admin) {
@@ -142,7 +158,7 @@ async function confirmDoctorEntry(session, appointmentId) {
   remoteDb = null;
   renderDashboard(session, "home");
 }
-function bindPageEvents(session, page) {
+function bindPageEvents(session, page, db) {
   document.querySelectorAll(".edit-appointment").forEach(button => button.onclick = () => { sessionStorage.setItem("editAppointmentId", button.dataset.id); renderDashboard(session, "edit"); });
   document.querySelectorAll(".confirm-appointment").forEach(button => button.onclick = () => confirmDoctorEntry(session, Number(button.dataset.id)));
   if ($("#cancel-edit")) $("#cancel-edit").onclick = () => { sessionStorage.removeItem("editAppointmentId"); renderDashboard(session, "home"); };
@@ -169,16 +185,20 @@ function bindPageEvents(session, page) {
   if ($("#add-patient")) $("#add-patient").onclick = () => renderDashboard(session, "new");
   if ($("#cancel-form")) $("#cancel-form").onclick = () => renderDashboard(session, "home");
   if (!$("#appointment-form")) return;
+
   const updateCapacity = () => {
     const form = $("#appointment-form");
     const date = form.elements.date.value;
     const period = form.elements.period.value;
     const doctorId = Number(form.elements.doctorId.value);
-    const booked = db.appointments.filter(appointment => appointment.date === date && appointment.period === period && appointment.doctorId === doctorId && appointment.status === "مؤكد").length;
+    const normalizedAppointments = (db.appointments || []).map(normalizeAppointment);
+    const booked = normalizedAppointments.filter(appointment => (appointment.date || appointment.appointment_date) === date && (appointment.period || "morning") === period && Number(appointment.doctorId ?? appointment.doctor_id) === doctorId && appointment.status === "مؤكد").length;
     $("#capacity-output").textContent = `${Math.max(0, 40 - booked)} مراجعًا`;
   };
+
   [$("#appointment-form").elements.date, $("#appointment-form").elements.period, $("#appointment-form").elements.doctorId].forEach(field => field.addEventListener("change", updateCapacity));
   updateCapacity();
+
   $("#appointment-form").onsubmit = async event => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
