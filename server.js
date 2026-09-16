@@ -14,7 +14,8 @@ const supabase = supabaseConfigured ? createClient(process.env.SUPABASE_URL, pro
 const sms = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
-const smsSender = process.env.TWILIO_SENDER_ID || process.env.TWILIO_PHONE_NUMBER;
+const smsPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+const smsSender = process.env.TWILIO_SENDER_ID || smsPhoneNumber;
 
 app.use(express.json());
 app.use(express.static(__dirname, { setHeaders: response => response.setHeader("Cache-Control", "no-store") }));
@@ -46,6 +47,14 @@ async function sendSms(to, body) {
   try {
     return await sms.messages.create({ body, from: smsSender, to: normalizedPhone });
   } catch (error) {
+    if (Number(error.code) === 21612 && smsPhoneNumber && smsSender !== smsPhoneNumber) {
+      console.warn("Alphanumeric sender rejected; retrying with the Twilio phone number.");
+      try {
+        return await sms.messages.create({ body, from: smsPhoneNumber, to: normalizedPhone });
+      } catch (fallbackError) {
+        throw new Error(`Twilio ${fallbackError.code || "error"}: ${fallbackError.message}`);
+      }
+    }
     throw new Error(`Twilio ${error.code || "error"}: ${error.message}`);
   }
 }
