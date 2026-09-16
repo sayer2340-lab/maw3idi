@@ -75,10 +75,10 @@ function appointmentForClient(appointment, patient) {
     doctorId: appointment.doctor_id,
     doctorName: appointment.doctor_name,
     clinicName: appointment.clinic_name,
-    date: appointment.appointment_date,
-    time: appointment.appointment_time,
+    date: appointment.appointment_date || appointment.date,
+    time: appointment.appointment_time || appointment.time,
     queueNumber: appointment.queue_number,
-    peopleAhead: appointment.people_ahead,
+    peopleAhead: Number(appointment.people_ahead || 0),
     reminder: Boolean(appointment.reminder_sent_at),
     patientName: patient?.name || appointment.patient_name || "مراجع",
     patientPhone: patient?.phone || appointment.phone || ""
