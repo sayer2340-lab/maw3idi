@@ -40,7 +40,13 @@ function verifyPassword(password, stored) {
 
 async function sendSms(to, body) {
   if (!sms) throw new Error("Twilio غير مهيأ على الخادم");
-  return sms.messages.create({ body, from: process.env.TWILIO_PHONE_NUMBER, to: normalizePhone(to) });
+  const normalizedPhone = normalizePhone(to);
+  if (!normalizedPhone || normalizedPhone.length < 10) throw new Error("رقم جوال المستلم غير صالح");
+  try {
+    return await sms.messages.create({ body, from: process.env.TWILIO_PHONE_NUMBER, to: normalizedPhone });
+  } catch (error) {
+    throw new Error(`Twilio ${error.code || "error"}: ${error.message}`);
+  }
 }
 
 async function sendNearTurnReminders(appointments) {
@@ -177,12 +183,14 @@ app.post("/api/reminders/run", async (req, res) => {
   if (!process.env.REMINDER_CRON_SECRET || req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await supabase.from("appointments").select("id,patient_id,people_ahead,appointment_date,doctor_id,clinic_name").eq("status", "مؤكد").gte("appointment_date", today).is("reminder_sent_at", null).lte("people_ahead", 5).limit(50);
-  if (error) return res.status(500).json({ error: "تعذر تحميل التذكيرات" });
+  if (error) return res.status(500).json({ error: `تعذر تحميل التذكيرات: ${error.message}` });
   const patientIds = data.map(appointment => appointment.patient_id);
   const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
-  if (patients.error) return res.status(500).json({ error: "تعذر تحميل بيانات المراجعين للتذكير" });
+  if (patients.error) return res.status(500).json({ error: `تعذر تحميل بيانات المراجعين للتذكير: ${patients.error.message}` });
   const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
   let sent = 0;
+  let failed = 0;
+  const failures = [];
   for (const appointment of data) {
     try {
       const patient = patientsById.get(appointment.patient_id);
@@ -192,10 +200,12 @@ app.post("/api/reminders/run", async (req, res) => {
       await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
       sent += 1;
     } catch (error) {
+      failed += 1;
+      failures.push({ appointmentId: appointment.id, error: error.message });
       console.error("Reminder error:", error.message);
     }
   }
-  res.json({ sent });
+  res.json({ sent, candidates: data.length, failed, failures });
 });
 
 app.listen(port, () => console.log(`Maw3idi server listening on ${port}`));
