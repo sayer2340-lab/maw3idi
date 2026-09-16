@@ -5,5 +5,6 @@ const response = await fetch(`${baseUrl}/api/reminders/run`, {
   method: "POST",
   headers: { "x-cron-secret": process.env.REMINDER_CRON_SECRET }
 });
-if (!response.ok) throw new Error(`Reminder request failed: ${response.status} ${await response.text()}`);
-console.log(await response.text());
+const body = await response.text();
+if (!response.ok) throw new Error(`Reminder request failed: ${response.status} ${body}`);
+console.log(`Reminder result: ${body}`);
