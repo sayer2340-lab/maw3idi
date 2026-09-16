@@ -14,6 +14,7 @@ const supabase = supabaseConfigured ? createClient(process.env.SUPABASE_URL, pro
 const sms = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
+const smsSender = process.env.TWILIO_SENDER_ID || process.env.TWILIO_PHONE_NUMBER;
 
 app.use(express.json());
 app.use(express.static(__dirname, { setHeaders: response => response.setHeader("Cache-Control", "no-store") }));
@@ -43,7 +44,7 @@ async function sendSms(to, body) {
   const normalizedPhone = normalizePhone(to);
   if (!normalizedPhone || normalizedPhone.length < 10) throw new Error("رقم جوال المستلم غير صالح");
   try {
-    return await sms.messages.create({ body, from: process.env.TWILIO_PHONE_NUMBER, to: normalizedPhone });
+    return await sms.messages.create({ body, from: smsSender, to: normalizedPhone });
   } catch (error) {
     throw new Error(`Twilio ${error.code || "error"}: ${error.message}`);
   }
@@ -88,9 +89,9 @@ function appointmentForClient(appointment = {}) {
 }
 
 app.get("/api/health", async (_req, res) => {
-  if (!supabaseConfigured) return res.status(503).json({ ok: false, supabaseConfigured: false, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), error: "أضف متغيرات Supabase في Render" });
+  if (!supabaseConfigured) return res.status(503).json({ ok: false, supabaseConfigured: false, twilioConfigured: Boolean(sms && smsSender), error: "أضف متغيرات Supabase في Render" });
   const { error } = await supabase.from("users").select("id").limit(1);
-  res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), databaseError: error?.message });
+  res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, twilioConfigured: Boolean(sms && smsSender), databaseError: error?.message });
 });
 
 app.post("/api/login", async (req, res) => {
