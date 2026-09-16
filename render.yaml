@@ -15,7 +15,7 @@ services:
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
-      - key: TWILIO_PHONE_NUMBER
+      - key: TWILIO_MESSAGING_SERVICE_SID
         sync: false
       - key: TWILIO_SENDER_ID
         sync: false
@@ -38,7 +38,7 @@ services:
         sync: false
       - key: TWILIO_AUTH_TOKEN
         sync: false
-      - key: TWILIO_PHONE_NUMBER
+      - key: TWILIO_MESSAGING_SERVICE_SID
         sync: false
       - key: TWILIO_SENDER_ID
         sync: false
