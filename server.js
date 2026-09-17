@@ -4,12 +4,16 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
+import twilio from "twilio";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = Number(process.env.PORT || 10000);
 const supabaseConfigured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 const supabase = supabaseConfigured ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY) : null;
+const sms = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+  : null;
 
 app.use(express.json());
 app.use(express.static(__dirname, { setHeaders: response => response.setHeader("Cache-Control", "no-store") }));
@@ -34,41 +38,57 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
 }
 
-function timeToMinutes(value) {
-  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
-  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+async function sendSms(to, body) {
+  if (!sms) throw new Error("Twilio غير مهيأ على الخادم");
+  const normalizedPhone = normalizePhone(to);
+  if (!normalizedPhone || normalizedPhone.length < 10) throw new Error("رقم جوال المستلم غير صالح");
+  try {
+    return await sms.messages.create({ body, from: process.env.TWILIO_PHONE_NUMBER, to: normalizedPhone });
+  } catch (error) {
+    throw new Error(`Twilio ${error.code || "error"}: ${error.message}`);
+  }
 }
 
-function minutesToTime(minutes) {
-  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+async function sendNearTurnReminders(appointments) {
+  if (!appointments.length) return;
+  const patientIds = appointments.map(appointment => appointment.patient_id);
+  const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
+  if (patients.error) throw patients.error;
+  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
+  for (const appointment of appointments) {
+    const patient = patientsById.get(appointment.patient_id);
+    if (!patient?.phone) continue;
+    try {
+      const text = appointment.people_ahead === 0 ? `موعدي: حان دور ${patient.name} الآن.` : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
+      await sendSms(patient.phone, text);
+      await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
+    } catch (error) {
+      console.error("Near-turn SMS error:", error.message);
+    }
+  }
 }
 
-function periodWindow(period) {
-  return period === "morning" ? { start: 8 * 60, end: 12 * 60 } : { start: 16 * 60, end: 22 * 60 };
-}
-
-function appointmentForClient(appointment = {}) {
+function appointmentForClient(appointment, patient) {
   return {
     ...appointment,
-    patientId: appointment.patient_id ?? appointment.patientId ?? null,
-    patientName: appointment.patient_name ?? appointment.patientName ?? null,
-    patientPhone: appointment.phone ?? appointment.patientPhone ?? null,
-    doctorId: appointment.doctor_id ?? appointment.doctorId ?? null,
-    doctorName: appointment.doctor_name ?? appointment.doctorName ?? null,
-    clinicName: appointment.clinic_name ?? appointment.clinicName ?? null,
-    date: appointment.appointment_date ?? appointment.date ?? null,
-    time: appointment.appointment_time ?? appointment.time ?? null,
-    registrationTime: appointment.registration_time ?? appointment.created_at ?? null,
-    queueNumber: appointment.queue_number ?? appointment.queueNumber ?? null,
-    peopleAhead: appointment.people_ahead ?? appointment.peopleAhead ?? 0,
-    reminder: Boolean(appointment.reminder_sent_at ?? appointment.reminder)
+    patientId: appointment.patient_id,
+    doctorId: appointment.doctor_id,
+    doctorName: appointment.doctor_name,
+    clinicName: appointment.clinic_name,
+    date: appointment.appointment_date || appointment.date,
+    time: appointment.appointment_time || appointment.time,
+    queueNumber: appointment.queue_number,
+    peopleAhead: Number(appointment.people_ahead || 0),
+    reminder: Boolean(appointment.reminder_sent_at),
+    patientName: patient?.name || appointment.patient_name || "مراجع",
+    patientPhone: patient?.phone || appointment.phone || ""
   };
 }
 
 app.get("/api/health", async (_req, res) => {
-  if (!supabaseConfigured) return res.status(503).json({ ok: false, supabaseConfigured: false, error: "أضف متغيرات Supabase في Render" });
+  if (!supabaseConfigured) return res.status(503).json({ ok: false, supabaseConfigured: false, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), error: "أضف متغيرات Supabase في Render" });
   const { error } = await supabase.from("users").select("id").limit(1);
-  res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, databaseError: error?.message });
+  res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), databaseError: error?.message });
 });
 
 app.post("/api/login", async (req, res) => {
@@ -95,26 +115,15 @@ app.get("/api/dashboard", async (_req, res) => {
   ]);
   const failed = [patients, appointments, doctors, users].find(result => result.error);
   if (failed) return res.status(500).json({ error: `تعذر تحميل بيانات لوحة التحكم: ${failed.error.message}` });
-  res.json({ patients: patients.data, appointments: appointments.data.map(appointmentForClient), doctors: doctors.data, users: users.data });
-});
-
-app.delete("/api/patients", async (req, res) => {
-  const patientIds = [...new Set((req.body?.patientIds || []).map(Number).filter(Number.isInteger))];
-  if (!patientIds.length) return res.status(400).json({ error: "اختر مراجعًا واحدًا على الأقل" });
-
-  const appointments = await supabase.from("appointments").delete().in("patient_id", patientIds);
-  if (appointments.error) return res.status(500).json({ error: `تعذر حذف مواعيد المراجعين: ${appointments.error.message}` });
-
-  const patients = await supabase.from("patients").delete().in("id", patientIds).select("id");
-  if (patients.error) return res.status(500).json({ error: `تعذر حذف المراجعين: ${patients.error.message}` });
-  res.json({ deletedPatients: patients.data.length });
+  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
+  res.json({ patients: patients.data, appointments: appointments.data.map(appointment => appointmentForClient(appointment, patientsById.get(appointment.patient_id))), doctors: doctors.data, users: users.data });
 });
 
 app.post("/api/appointments", async (req, res) => {
   const data = req.body || {};
   const { name, phone, birth, gender, blood, notes, date, period, doctorId, doctorName, clinicName, type } = data;
   if (!name || !phone || !birth || !date || !period || !doctorId || !type) return res.status(400).json({ error: "البيانات المطلوبة ناقصة" });
-  const { data: existingPatient, error: patientLookupError } = await supabase.from("patients").select("*").eq("phone", phone).maybeSingle();
+  const { data: existingPatient, error: patientLookupError } = await supabase.from("patients").select("*").eq("phone", phone).eq("name", name.trim()).maybeSingle();
   if (patientLookupError) return res.status(500).json({ error: `تعذر قراءة بيانات المراجع: ${patientLookupError.message}` });
   let patient = existingPatient;
   if (!patient) {
@@ -122,18 +131,20 @@ app.post("/api/appointments", async (req, res) => {
     if (created.error) return res.status(500).json({ error: `تعذر حفظ بيانات المراجع: ${created.error.message}` });
     patient = created.data;
   }
-  const window = periodWindow(period);
-  const booked = await supabase.from("appointments").select("appointment_time,queue_number").eq("appointment_date", date).eq("period", period).eq("doctor_id", doctorId).neq("status", "ملغى");
-  if (booked.error) return res.status(500).json({ error: `تعذر حساب الأوقات المتاحة: ${booked.error.message}` });
-  const occupied = new Set(booked.data.map(item => timeToMinutes(item.appointment_time)).filter(Number.isInteger));
-  let appointmentMinutes = window.start;
-  while (appointmentMinutes < window.end && occupied.has(appointmentMinutes)) appointmentMinutes += 15;
-  if (appointmentMinutes >= window.end) return res.status(409).json({ error: "اكتملت أوقات هذه الفترة لهذا الدكتور" });
-  const registrationTime = new Date().toISOString();
-  const queueNumber = Math.floor((appointmentMinutes - window.start) / 15) + 1;
-  const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, patient_name: patient.name, phone: patient.phone, birth: patient.birth, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: minutesToTime(appointmentMinutes), registration_time: registrationTime, date, time: minutesToTime(appointmentMinutes), queue_number: queueNumber, people_ahead: 0, type, status: "مؤكد" }).select("*").single();
+  const queue = await supabase.from("appointments").select("id", { count: "exact", head: true }).eq("appointment_date", date).eq("period", period).eq("doctor_id", doctorId).neq("status", "ملغى");
+  if (queue.error) return res.status(500).json({ error: `تعذر حساب الدور: ${queue.error.message}` });
+  if (queue.count >= 40) return res.status(409).json({ error: "اكتملت حجوزات هذه الفترة لهذا الدكتور" });
+  const appointmentTime = period === "morning" ? "08:00" : "16:00";
+  const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, patient_name: patient.name, phone: patient.phone, birth: patient.birth, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: appointmentTime, date, time: appointmentTime, queue_number: queue.count + 1, people_ahead: queue.count, type, status: "مؤكد" }).select("*").single();
   if (appointment.error) return res.status(500).json({ error: `تعذر حفظ الموعد: ${appointment.error.message}` });
-  res.status(201).json({ appointment: appointmentForClient(appointment.data) });
+  let smsSent = false;
+  try {
+    await sendSms(phone, `موعدي: تم حجز موعدك بتاريخ ${date}، الدور رقم ${queue.count + 1}. سيتم تذكيرك عند اقتراب دورك.`);
+    smsSent = true;
+  } catch (error) {
+    console.error("SMS error:", error.message);
+  }
+  res.status(201).json({ appointment: appointment.data, smsSent });
 });
 
 app.patch("/api/appointments/:id", async (req, res) => {
@@ -155,6 +166,7 @@ app.post("/api/appointments/:id/confirm", async (req, res) => {
     for (const next of waiting.data) {
       await supabase.from("appointments").update({ people_ahead: Math.max(0, Number(next.people_ahead) - 1) }).eq("id", next.id);
     }
+    await sendNearTurnReminders(waiting.data.filter(next => !next.reminder_sent_at && Number(next.people_ahead) - 1 <= 5));
   }
   res.json({ appointment: appointmentForClient(appointment) });
 });
@@ -167,12 +179,48 @@ app.post("/api/staff", async (req, res) => {
   res.status(201).json({ staff });
 });
 
+app.post("/api/admin", async (req, res) => {
+  const data = req.body || {};
+  if (!data.name || !data.username || !data.password) return res.status(400).json({ error: "بيانات المدير ناقصة" });
+  const { data: admin, error } = await supabase.from("users").insert({ name: data.name.trim(), username: data.username.trim().toLowerCase(), password_hash: hashPassword(data.password), role: "admin" }).select("id,name,username,role").single();
+  if (error) return res.status(409).json({ error: "اسم المستخدم مستخدم مسبقًا أو تعذر حفظ المدير" });
+  res.status(201).json({ admin });
+});
+
+app.delete("/api/admin/demo", async (_req, res) => {
+  const admins = await supabase.from("users").select("id,username").eq("role", "admin");
+  if (admins.error) return res.status(500).json({ error: `تعذر قراءة حسابات المديرين: ${admins.error.message}` });
+  if (admins.data.length < 2) return res.status(409).json({ error: "أضف مديرًا جديدًا قبل حذف الحساب التجريبي" });
+  const demo = admins.data.find(admin => admin.username.toLowerCase() === "admin");
+  if (!demo) return res.status(404).json({ error: "الحساب التجريبي غير موجود" });
+  const deleted = await supabase.from("users").delete().eq("id", demo.id).eq("role", "admin");
+  if (deleted.error) return res.status(500).json({ error: `تعذر حذف الحساب التجريبي: ${deleted.error.message}` });
+  res.json({ deleted: true });
+});
+
 app.post("/api/reminders/run", async (req, res) => {
-  if (!process.env.REMINDER_CRON_SECRET || req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
-  const threshold = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const due = await supabase.from("appointments").select("id,patient_id,appointment_date,appointment_time,registration_time,created_at").eq("status", "مؤكد").is("reminder_sent_at", null).lte("registration_time", threshold).limit(50);
-  if (due.error) return res.status(500).json({ error: `تعذر تحميل التذكيرات الزمنية: ${due.error.message}` });
-  res.json({ sent: 0, candidates: due.data.length, due: due.data, message: "التذكيرات جاهزة للإرسال عبر مزود الرسائل الجديد" });
+  if (req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase.from("appointments").select("id,patient_id,people_ahead,appointment_date,doctor_id,clinic_name").eq("status", "مؤكد").gte("appointment_date", today).is("reminder_sent_at", null).lte("people_ahead", 5).limit(50);
+  if (error) return res.status(500).json({ error: "تعذر تحميل التذكيرات" });
+  const patientIds = data.map(appointment => appointment.patient_id);
+  const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
+  if (patients.error) return res.status(500).json({ error: "تعذر تحميل بيانات المراجعين للتذكير" });
+  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
+  let sent = 0;
+  for (const appointment of data) {
+    try {
+      const patient = patientsById.get(appointment.patient_id);
+      if (!patient?.phone) continue;
+      const text = appointment.people_ahead === 0 ? `موعدي: حان دور ${patient.name} الآن.` : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
+      await sendSms(patient.phone, text);
+      await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
+      sent += 1;
+    } catch (error) {
+      console.error("Reminder error:", error.message);
+    }
+  }
+  res.json({ sent });
 });
 
 app.listen(port, () => console.log(`Maw3idi server listening on ${port}`));
