@@ -44,7 +44,6 @@ const normalizeAppointment = (appointment = {}) => ({
   clinicName: appointment.clinicName ?? appointment.clinic_name ?? null,
   date: appointment.date ?? appointment.appointment_date ?? null,
   time: appointment.time ?? appointment.appointment_time ?? null,
-  registrationTime: appointment.registrationTime ?? appointment.registration_time ?? appointment.created_at ?? null,
   queueNumber: appointment.queueNumber ?? appointment.queue_number ?? null,
   peopleAhead: Number(appointment.peopleAhead ?? appointment.people_ahead ?? 0),
   status: appointment.status ?? "مؤكد",
@@ -102,8 +101,8 @@ async function renderDashboard(session, page = "home") {
   $("#logout").onclick = () => { localStorage.removeItem(SESSION_KEY); render(); };
   document.querySelectorAll("[data-page]").forEach(button => button.onclick = () => renderDashboard(session, button.dataset.page));
   if ($("#new-appointment")) $("#new-appointment").onclick = () => renderDashboard(session, "new");
-    bindPageEvents(session, page, { ...db, patients, appointments });
-  checkQueueReminders(db);
+  bindPageEvents(session, page, { ...db, patients, appointments });
+  checkQueueReminders({ ...db, patients, appointments });
 }
 const pageTitle = (page, admin) => page === "home" ? "صباح الخير، " + (admin ? "مدير المستوصف" : "فريق الاستقبال") : page === "new" ? "حجز موعد جديد" : page === "patients" ? "سجل المراجعين" : page === "staff-add" ? "إضافة موظف جديد" : page === "edit" ? "تعديل الموعد" : "إدارة الموظفين";
 function pageBody(page, db, admin) {
@@ -117,7 +116,7 @@ function pageBody(page, db, admin) {
     .filter(a => a.date >= today() && a.status === "مؤكد")
     .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
     .map(appointment => [appointment.patientId, appointment])).values()).slice(0, 1);
-  return `<div class="stats"><div class="stat"><small>مواعيد اليوم</small><strong>${activeAppointments.filter(a => a.date === today()).length}</strong></div><div class="stat"><small>إجمالي المراجعين</small><strong>${db.patients.length}</strong></div><div class="stat"><small>مواعيد قادمة</small><strong class="accent">${activeAppointments.filter(a => a.date >= today()).length}</strong></div><div class="stat"><div class="stat"><small>التسجيلات المؤكدة</small><strong>${activeAppointments.filter(a => a.date >= today()).length}</strong></div><div class="stat"><small>الموظفون</small><strong>${db.users.filter(u => u.role === "staff").length}</strong></div></div><div class="grid-2"><div class="panel"><div class="section-title"><h2>الموعد القادم</h2><span class="badge">${upcoming.length ? "موعد واحد" : "لا يوجد"}</span></div>${upcoming.length ? upcoming.map(a => { const p = { name: a.patientName, phone: a.patientPhone }; const doctor = (db.doctors || []).find(x => x.id === a.doctorId); return `<div class="appointment"><div><strong>${a.patientName || "مراجع"}</strong><small>${formatDate(a.date)} · وقت الموعد ${a.time || "غير محدد"} · وقت التسجيل ${a.registrationTime ? new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium", timeStyle: "short" }).format(new Date(a.registrationTime)) : "غير محدد"} · ${a.type} · ${a.clinicName || "عيادة غير محددة"} · ${a.doctorName || doctor?.name || "طبيب غير محدد"}</small></div><div><span class="badge">${a.status}</span>${!admin && a.status === "مؤكد" ? `<button class="primary confirm-appointment" data-id="${a.id}" type="button">تأكيد الموعد</button>` : ""}<button class="secondary edit-appointment" data-id="${a.id}" type="button">تعديل</button></div></div>`; }).join("") : '<div class="empty">لا توجد مواعيد قادمة</div>'}</div><div class="panel"><h2>التذكيرات</h2><p>يستحق كل مراجع تذكيرًا بعد مرور ساعة على وقت تسجيله.</p><div class="appointment"><div><strong>التذكير الزمني</strong><small>يُحسب من وقت تسجيل كل موعد</small></div><span class="badge">مفعل</span></div></div></div>`;
+  return `<div class="stats"><div class="stat"><small>مواعيد اليوم</small><strong>${activeAppointments.filter(a => a.date === today()).length}</strong></div><div class="stat"><small>إجمالي المراجعين</small><strong>${db.patients.length}</strong></div><div class="stat"><small>مواعيد قادمة</small><strong class="accent">${activeAppointments.filter(a => a.date >= today()).length}</strong></div><div class="stat"><small>قائمة الانتظار النشطة</small><strong>${activeAppointments.filter(a => a.date >= today()).length}</strong></div><div class="stat"><small>الموظفون</small><strong>${db.users.filter(u => u.role === "staff").length}</strong></div></div><div class="grid-2"><div class="panel"><div class="section-title"><h2>المواعيد القادمة</h2><span class="badge">${upcoming.length} مواعيد</span></div>${upcoming.length ? upcoming.map(a => { const p = { name: a.patientName, phone: a.patientPhone }; const doctor = (db.doctors || []).find(x => x.id === a.doctorId); return `<div class="appointment"><div><strong>${a.patientName || "مراجع"}</strong><small>${formatDate(a.date)} · الفترة ${a.period === "morning" ? "الصباحية 08:00 - 12:00" : "المسائية 16:00 - 22:00"} · الدور ${a.queueNumber || "-"} · باقي ${a.peopleAhead || "0"} أشخاص · ${a.type} · ${a.clinicName || "عيادة غير محددة"} · ${a.doctorName || doctor?.name || "طبيب غير محدد"}</small></div><div><span class="badge">${a.status}</span>${!admin && a.status === "مؤكد" ? `<button class="primary confirm-appointment" data-id="${a.id}" type="button">تأكيد دخول الدكتور</button>` : ""}${Number(a.peopleAhead) <= 5 && p.phone ? `<a class="secondary whatsapp-reminder" target="_blank" rel="noopener" data-id="${a.id}" href="${whatsappLink(a, p)}">واتساب</a>` : ""}<button class="secondary edit-appointment" data-id="${a.id}" type="button">تعديل</button></div></div>`; }).join("") : '<div class="empty">لا توجد مواعيد قادمة</div>'}</div><div class="panel"><h2>تذكيرات النظام</h2><p>يتم حساب التذكير حسب الدور، ويظهر التنبيه عندما يتبقى للمراجع 5 أشخاص أو أقل.</p><div class="appointment"><div><strong>التذكير التلقائي</strong><small>مفعل لجميع المواعيد</small></div><span class="badge">مفعل</span></div></div></div>`;
 }
 function whatsappLink(appointment, patient) {
   let phone = String(patient.phone || "").replace(/[^0-9]/g, "");
@@ -138,11 +137,8 @@ function appointmentEditForm(db, appointmentId) {
   const patient = db.patients.find(item => item.id === appointment.patientId);
       return `<div class="panel"><h2>تعديل موعد ${patient?.name || "المراجع"}</h2><form id="edit-appointment-form"><input type="hidden" name="id" value="${appointment.id}"><div class="form-grid"><div><label>تاريخ الموعد *</label><input name="date" required type="date" min="${today()}" value="${appointment.date || ""}"></div><div><label>فترة الحجز *</label><select name="period" required><option value="morning" ${appointment.period === "morning" ? "selected" : ""}>صباحية - 08:00 إلى 12:00</option><option value="evening" ${appointment.period === "evening" ? "selected" : ""}>مسائية - 16:00 إلى 22:00</option></select></div><div><label>رقم الدور التلقائي</label><output>${appointment.queueNumber || "-"}</output></div><div><label>الدكتور *</label><select name="doctorId" required>${doctorOptions}</select></div><div><label>اسم الدكتور يدويًا</label><input name="doctorName" value="${appointment.doctorName || ""}" placeholder="اختياري"></div><div><label>اسم العيادة يدويًا</label><input name="clinicName" value="${appointment.clinicName || ""}" placeholder="مثال: عيادة القلب"></div><div><label>نوع الزيارة</label><select name="type"><option ${appointment.type === "عيادة عامة" ? "selected" : ""}>عيادة عامة</option><option ${appointment.type === "طب الأطفال" ? "selected" : ""}>طب الأطفال</option><option ${appointment.type === "الأسنان" ? "selected" : ""}>الأسنان</option><option ${appointment.type === "عيادة النساء" ? "selected" : ""}>عيادة النساء</option><option ${appointment.type === "المختبر" ? "selected" : ""}>المختبر</option></select></div><div><label>حالة الموعد</label><select name="status"><option ${appointment.status === "مؤكد" ? "selected" : ""}>مؤكد</option><option ${appointment.status === "مكتمل" ? "selected" : ""}>مكتمل</option><option ${appointment.status === "ملغى" ? "selected" : ""}>ملغى</option></select></div></div><div class="form-actions"><button class="primary">حفظ التعديلات</button><button type="button" class="secondary" id="cancel-edit">إلغاء</button></div></form></div>`;
 }function patientTable(db, admin) {
-  const controls = admin ? '<button class="secondary" id="delete-selected-patients" type="button" disabled>حذف المحدد</button>' : '<button class="primary" id="add-patient">＋ إضافة موعد</button>';
-  const selectHeader = admin ? '<th><input id="select-all-patients" type="checkbox" aria-label="تحديد كل المراجعين"></th>' : "";
-  const selectCell = patient => admin ? `<td><input class="patient-select" type="checkbox" value="${patient.id}" aria-label="تحديد ${patient.name}"></td>` : "";
-  const columns = admin ? 6 : 5;
-  return `<div class="panel"><div class="section-title"><h2>قائمة المراجعين</h2>${controls}</div><div class="table-wrap"><table><thead><tr>${selectHeader}<th>الاسم</th><th>الجوال</th><th>تاريخ الميلاد</th><th>الجنس</th><th>المواعيد</th></tr></thead><tbody>${db.patients.map(patient => `<tr>${selectCell(patient)}<td><strong>${patient.name}</strong></td><td>${patient.phone}</td><td>${formatDate(patient.birth)}</td><td>${patient.gender}</td><td>${db.appointments.filter(appointment => Number(appointment.patientId) === Number(patient.id)).length}</td></tr>`).join("") || `<tr><td colspan="${columns}" class="empty">لا يوجد مراجعون</td></tr>`}</tbody></table></div></div>`;
+  const search = admin ? '<input id="patient-phone-search" type="search" inputmode="tel" placeholder="بحث برقم الجوال" aria-label="بحث برقم الجوال">' : "";
+  return `<div class="panel"><div class="section-title"><h2>قائمة المراجعين</h2><div class="form-actions">${search}${!admin ? '<button class="primary" id="add-patient">＋ إضافة موعد</button>' : ""}</div></div><div class="table-wrap"><table><thead><tr><th>الاسم</th><th>الجوال</th><th>تاريخ الميلاد</th><th>الجنس</th><th>المواعيد</th></tr></thead><tbody>${db.patients.map(p => `<tr class="patient-row" data-phone="${String(p.phone || "").replace(/[^0-9٠-٩]/g, "")}"><td><strong>${p.name}</strong></td><td>${p.phone}</td><td>${formatDate(p.birth)}</td><td>${p.gender}</td><td>${db.appointments.filter(a => a.patientId === p.id).length}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">لا يوجد مراجعون</td></tr>'}</tbody></table></div></div>`;
 }
 function staffForm() {
   return `<div class="panel"><h2>بيانات الموظف الجديد</h2><form id="staff-form"><div class="form-grid">
@@ -166,27 +162,10 @@ async function confirmDoctorEntry(session, appointmentId) {
 function bindPageEvents(session, page, db) {
   document.querySelectorAll(".edit-appointment").forEach(button => button.onclick = () => { sessionStorage.setItem("editAppointmentId", button.dataset.id); renderDashboard(session, "edit"); });
   document.querySelectorAll(".confirm-appointment").forEach(button => button.onclick = () => confirmDoctorEntry(session, Number(button.dataset.id)));
-  const selectAllPatients = $("#select-all-patients");
-  const deleteSelectedPatients = $("#delete-selected-patients");
-  const patientSelections = () => Array.from(document.querySelectorAll(".patient-select:checked"));
-  const updateDeleteButton = () => {
-    if (deleteSelectedPatients) deleteSelectedPatients.disabled = patientSelections().length === 0;
-    if (selectAllPatients) selectAllPatients.checked = document.querySelectorAll(".patient-select").length > 0 && patientSelections().length === document.querySelectorAll(".patient-select").length;
-  };
-  if (selectAllPatients) selectAllPatients.onchange = () => {
-    document.querySelectorAll(".patient-select").forEach(checkbox => { checkbox.checked = selectAllPatients.checked; });
-    updateDeleteButton();
-  };
-  document.querySelectorAll(".patient-select").forEach(checkbox => checkbox.onchange = updateDeleteButton);
-  if (deleteSelectedPatients) deleteSelectedPatients.onclick = async () => {
-    const patientIds = patientSelections().map(checkbox => Number(checkbox.value));
-    if (!patientIds.length || !confirm(`سيتم حذف ${patientIds.length} مراجعًا وجميع مواعيدهم. هل تريد المتابعة؟`)) return;
-    const response = await fetch(`${API_BASE}/patients`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientIds }) });
-    const result = await response.json();
-    if (!response.ok) return toast(result.error || "تعذر حذف المراجعين");
-    remoteDb = null;
-    toast(`تم حذف ${result.deletedPatients} مراجعًا`);
-    renderDashboard(session, "patients");
+  if ($("#patient-phone-search")) $("#patient-phone-search").oninput = event => {
+    const normalizeDigits = value => String(value || "").replace(/[٠-٩]/g, digit => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit))).replace(/\D/g, "");
+    const query = normalizeDigits(event.target.value);
+    document.querySelectorAll(".patient-row").forEach(row => { row.hidden = query && !normalizeDigits(row.dataset.phone).includes(query); });
   };
   if ($("#cancel-edit")) $("#cancel-edit").onclick = () => { sessionStorage.removeItem("editAppointmentId"); renderDashboard(session, "home"); };
   if ($("#edit-appointment-form")) $("#edit-appointment-form").onsubmit = async event => {
@@ -219,9 +198,8 @@ function bindPageEvents(session, page, db) {
     const period = form.elements.period.value;
     const doctorId = Number(form.elements.doctorId.value);
     const normalizedAppointments = (db.appointments || []).map(normalizeAppointment);
-    const totalSlots = period === "morning" ? 16 : 24;
     const booked = normalizedAppointments.filter(appointment => (appointment.date || appointment.appointment_date) === date && (appointment.period || "morning") === period && Number(appointment.doctorId ?? appointment.doctor_id) === doctorId && appointment.status === "مؤكد").length;
-    $("#capacity-output").textContent = `${Math.max(0, totalSlots - booked)} وقتًا متاحًا`;
+    $("#capacity-output").textContent = `${Math.max(0, 40 - booked)} مراجعًا`;
   };
 
   [$("#appointment-form").elements.date, $("#appointment-form").elements.period, $("#appointment-form").elements.doctorId].forEach(field => field.addEventListener("change", updateCapacity));
@@ -234,7 +212,7 @@ function bindPageEvents(session, page, db) {
     const result = await response.json();
     if (!response.ok) return toast(result.error || "تعذر حفظ الموعد");
     remoteDb = null;
-    toast("تم حفظ الموعد بنجاح");
+    toast(result.smsSent ? "تم حفظ الموعد وإرسال رسالة التذكير" : "تم حفظ الموعد، وتعذر إرسال الرسالة مؤقتًا");
     renderDashboard(session, "home");
   };
 }
