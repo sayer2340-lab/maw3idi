@@ -126,6 +126,18 @@ app.get("/api/dashboard", async (_req, res) => {
   res.json({ patients: patients.data, appointments: appointments.data.map(appointmentForClient), doctors: doctors.data, users: users.data });
 });
 
+app.delete("/api/patients", async (req, res) => {
+  const patientIds = [...new Set((req.body?.patientIds || []).map(Number).filter(Number.isInteger))];
+  if (!patientIds.length) return res.status(400).json({ error: "اختر مراجعًا واحدًا على الأقل" });
+
+  const appointments = await supabase.from("appointments").delete().in("patient_id", patientIds);
+  if (appointments.error) return res.status(500).json({ error: `تعذر حذف مواعيد المراجعين: ${appointments.error.message}` });
+
+  const patients = await supabase.from("patients").delete().in("id", patientIds).select("id");
+  if (patients.error) return res.status(500).json({ error: `تعذر حذف المراجعين: ${patients.error.message}` });
+  res.json({ deletedPatients: patients.data.length });
+});
+
 app.post("/api/appointments", async (req, res) => {
   const data = req.body || {};
   const { name, phone, birth, gender, blood, notes, date, period, doctorId, doctorName, clinicName, type } = data;
