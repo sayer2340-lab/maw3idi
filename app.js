@@ -149,7 +149,7 @@ function staffForm() {
     <div><label>كلمة المرور *</label><input name="password" required type="password" minlength="6" autocomplete="new-password" placeholder="6 أحرف على الأقل"></div>
     </div><div class="form-actions"><button class="primary">حفظ الموظف</button><button type="button" class="secondary" id="cancel-staff">إلغاء</button></div></form></div>`;
 }
-function staffTable(db) { const staff = db.users.filter(u => u.role === "staff"); return `<div class="panel"><div class="section-title"><h2>الموظفون</h2><button class="primary" id="add-staff">＋ إضافة موظف</button></div><div class="table-wrap"><table><thead><tr><th>الموظف</th><th>تاريخ الميلاد</th><th>الجوال</th><th>اسم المستخدم</th><th>الحالة</th></tr></thead><tbody>${staff.map(u => `<tr><td><strong>${u.name}</strong></td><td>${u.birth ? formatDate(u.birth) : "غير محدد"}</td><td>${u.phone || "غير محدد"}</td><td>${u.username}</td><td><span class="badge">نشط</span></td></tr>`).join("")}</tbody></table></div></div>`; }
+function staffTable(db) { const staff = db.users.filter(u => u.role === "staff"); return `<div class="panel"><div class="section-title"><h2>الموظفون</h2><button class="primary" id="add-staff">＋ إضافة موظف</button></div><div class="table-wrap"><table><thead><tr><th>الموظف</th><th>تاريخ الميلاد</th><th>الجوال</th><th>اسم المستخدم</th><th>الحالة</th></tr></thead><tbody>${staff.map(u => `<tr><td><strong>${u.name}</strong></td><td>${u.birth ? formatDate(u.birth) : "غير محدد"}</td><td>${u.phone || "غير محدد"}</td><td>${u.username}</td><td><span class="badge">نشط</span></td></tr>`).join("")}</tbody></table></div></div><div class="panel"><h2>بيانات المدير</h2><form id="admin-form"><div class="form-grid"><div><label>اسم المدير *</label><input name="name" required placeholder="الاسم الكامل"></div><div><label>اسم المستخدم *</label><input name="username" required autocomplete="username" placeholder="اسم المستخدم الجديد"></div><div><label>كلمة المرور *</label><input name="password" required type="password" minlength="6" autocomplete="new-password" placeholder="6 أحرف على الأقل"></div></div><div class="form-actions"><button class="primary">حفظ المدير الجديد</button><button class="secondary" id="delete-demo-admin" type="button">حذف الحساب التجريبي</button></div></form></div>`; }
 async function confirmDoctorEntry(session, appointmentId) {
   const response = await fetch(`${API_BASE}/appointments/${appointmentId}/confirm`, { method: "POST" });
   const result = await response.json();
@@ -187,6 +187,22 @@ function bindPageEvents(session, page, db) {
     remoteDb = null;
     toast("تمت إضافة الموظف بنجاح");
     renderDashboard(session, "staff");
+  };
+  if ($("#admin-form")) $("#admin-form").onsubmit = async event => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.target));
+    const response = await fetch(`${API_BASE}/admin`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    const result = await response.json();
+    if (!response.ok) return toast(result.error || "تعذر إضافة المدير");
+    event.target.reset();
+    toast("تم حفظ بيانات المدير الجديد");
+  };
+  if ($("#delete-demo-admin")) $("#delete-demo-admin").onclick = async () => {
+    if (!confirm("هل تريد حذف الحساب التجريبي admin / admin123؟ تأكد من حفظ مدير جديد أولًا.")) return;
+    const response = await fetch(`${API_BASE}/admin/demo`, { method: "DELETE" });
+    const result = await response.json();
+    if (!response.ok) return toast(result.error || "تعذر حذف الحساب التجريبي");
+    toast("تم حذف الحساب التجريبي");
   };
   if ($("#add-patient")) $("#add-patient").onclick = () => renderDashboard(session, "new");
   if ($("#cancel-form")) $("#cancel-form").onclick = () => renderDashboard(session, "home");
