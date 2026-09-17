@@ -101,7 +101,7 @@ async function renderDashboard(session, page = "home") {
   $("#logout").onclick = () => { localStorage.removeItem(SESSION_KEY); render(); };
   document.querySelectorAll("[data-page]").forEach(button => button.onclick = () => renderDashboard(session, button.dataset.page));
   if ($("#new-appointment")) $("#new-appointment").onclick = () => renderDashboard(session, "new");
-  bindPageEvents(session, page);
+    bindPageEvents(session, page, { ...db, patients, appointments });
   checkQueueReminders(db);
 }
 const pageTitle = (page, admin) => page === "home" ? "صباح الخير، " + (admin ? "مدير المستوصف" : "فريق الاستقبال") : page === "new" ? "حجز موعد جديد" : page === "patients" ? "سجل المراجعين" : page === "staff-add" ? "إضافة موظف جديد" : page === "edit" ? "تعديل الموعد" : "إدارة الموظفين";
