@@ -34,6 +34,19 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
 }
 
+function timeToMinutes(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function minutesToTime(minutes) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function periodWindow(period) {
+  return period === "morning" ? { start: 8 * 60, end: 12 * 60 } : { start: 16 * 60, end: 22 * 60 };
+}
+
 function appointmentForClient(appointment = {}) {
   return {
     ...appointment,
@@ -45,6 +58,7 @@ function appointmentForClient(appointment = {}) {
     clinicName: appointment.clinic_name ?? appointment.clinicName ?? null,
     date: appointment.appointment_date ?? appointment.date ?? null,
     time: appointment.appointment_time ?? appointment.time ?? null,
+    registrationTime: appointment.registration_time ?? appointment.created_at ?? null,
     queueNumber: appointment.queue_number ?? appointment.queueNumber ?? null,
     peopleAhead: appointment.people_ahead ?? appointment.peopleAhead ?? 0,
     reminder: Boolean(appointment.reminder_sent_at ?? appointment.reminder)
@@ -108,11 +122,16 @@ app.post("/api/appointments", async (req, res) => {
     if (created.error) return res.status(500).json({ error: `تعذر حفظ بيانات المراجع: ${created.error.message}` });
     patient = created.data;
   }
-  const queue = await supabase.from("appointments").select("id", { count: "exact", head: true }).eq("appointment_date", date).eq("period", period).eq("doctor_id", doctorId).neq("status", "ملغى");
-  if (queue.error) return res.status(500).json({ error: `تعذر حساب الدور: ${queue.error.message}` });
-  if (queue.count >= 40) return res.status(409).json({ error: "اكتملت حجوزات هذه الفترة لهذا الدكتور" });
-  const appointmentTime = period === "morning" ? "08:00" : "16:00";
-  const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, patient_name: patient.name, phone: patient.phone, birth: patient.birth, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: appointmentTime, date, time: appointmentTime, queue_number: queue.count + 1, people_ahead: queue.count, type, status: "مؤكد" }).select("*").single();
+  const window = periodWindow(period);
+  const booked = await supabase.from("appointments").select("appointment_time,queue_number").eq("appointment_date", date).eq("period", period).eq("doctor_id", doctorId).neq("status", "ملغى");
+  if (booked.error) return res.status(500).json({ error: `تعذر حساب الأوقات المتاحة: ${booked.error.message}` });
+  const occupied = new Set(booked.data.map(item => timeToMinutes(item.appointment_time)).filter(Number.isInteger));
+  let appointmentMinutes = window.start;
+  while (appointmentMinutes < window.end && occupied.has(appointmentMinutes)) appointmentMinutes += 15;
+  if (appointmentMinutes >= window.end) return res.status(409).json({ error: "اكتملت أوقات هذه الفترة لهذا الدكتور" });
+  const registrationTime = new Date().toISOString();
+  const queueNumber = Math.floor((appointmentMinutes - window.start) / 15) + 1;
+  const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, patient_name: patient.name, phone: patient.phone, birth: patient.birth, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: minutesToTime(appointmentMinutes), registration_time: registrationTime, date, time: minutesToTime(appointmentMinutes), queue_number: queueNumber, people_ahead: 0, type, status: "مؤكد" }).select("*").single();
   if (appointment.error) return res.status(500).json({ error: `تعذر حفظ الموعد: ${appointment.error.message}` });
   res.status(201).json({ appointment: appointmentForClient(appointment.data) });
 });
@@ -150,7 +169,10 @@ app.post("/api/staff", async (req, res) => {
 
 app.post("/api/reminders/run", async (req, res) => {
   if (!process.env.REMINDER_CRON_SECRET || req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
-  res.json({ sent: 0, disabled: true, message: "تم إيقاف مزود الرسائل مؤقتًا" });
+  const threshold = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const due = await supabase.from("appointments").select("id,patient_id,appointment_date,appointment_time,registration_time,created_at").eq("status", "مؤكد").is("reminder_sent_at", null).lte("registration_time", threshold).limit(50);
+  if (due.error) return res.status(500).json({ error: `تعذر تحميل التذكيرات الزمنية: ${due.error.message}` });
+  res.json({ sent: 0, candidates: due.data.length, due: due.data, message: "التذكيرات جاهزة للإرسال عبر مزود الرسائل الجديد" });
 });
 
 app.listen(port, () => console.log(`Maw3idi server listening on ${port}`));
