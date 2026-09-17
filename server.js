@@ -4,16 +4,12 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
-import twilio from "twilio";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const port = Number(process.env.PORT || 10000);
 const supabaseConfigured = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 const supabase = supabaseConfigured ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY) : null;
-const sms = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
-  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
-  : null;
 
 app.use(express.json());
 app.use(express.static(__dirname, { setHeaders: response => response.setHeader("Cache-Control", "no-store") }));
@@ -38,36 +34,6 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
 }
 
-async function sendSms(to, body) {
-  if (!sms) throw new Error("Twilio غير مهيأ على الخادم");
-  const normalizedPhone = normalizePhone(to);
-  if (!normalizedPhone || normalizedPhone.length < 10) throw new Error("رقم جوال المستلم غير صالح");
-  try {
-    return await sms.messages.create({ body, from: process.env.TWILIO_PHONE_NUMBER, to: normalizedPhone });
-  } catch (error) {
-    throw new Error(`Twilio ${error.code || "error"}: ${error.message}`);
-  }
-}
-
-async function sendNearTurnReminders(appointments) {
-  if (!appointments.length) return;
-  const patientIds = appointments.map(appointment => appointment.patient_id);
-  const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
-  if (patients.error) throw patients.error;
-  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
-  for (const appointment of appointments) {
-    const patient = patientsById.get(appointment.patient_id);
-    if (!patient?.phone) continue;
-    try {
-      const text = appointment.people_ahead === 0 ? `موعدي: حان دور ${patient.name} الآن.` : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
-      await sendSms(patient.phone, text);
-      await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
-    } catch (error) {
-      console.error("Near-turn SMS error:", error.message);
-    }
-  }
-}
-
 function appointmentForClient(appointment, patient) {
   return {
     ...appointment,
@@ -86,9 +52,9 @@ function appointmentForClient(appointment, patient) {
 }
 
 app.get("/api/health", async (_req, res) => {
-  if (!supabaseConfigured) return res.status(503).json({ ok: false, supabaseConfigured: false, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), error: "أضف متغيرات Supabase في Render" });
+  if (!supabaseConfigured) return res.status(503).json({ ok: false, supabaseConfigured: false, error: "أضف متغيرات Supabase في Render" });
   const { error } = await supabase.from("users").select("id").limit(1);
-  res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, twilioConfigured: Boolean(sms && process.env.TWILIO_PHONE_NUMBER), databaseError: error?.message });
+  res.status(error ? 503 : 200).json({ ok: !error, supabaseConfigured: true, databaseReachable: !error, databaseError: error?.message });
 });
 
 app.post("/api/login", async (req, res) => {
@@ -137,14 +103,7 @@ app.post("/api/appointments", async (req, res) => {
   const appointmentTime = period === "morning" ? "08:00" : "16:00";
   const appointment = await supabase.from("appointments").insert({ patient_id: patient.id, patient_name: patient.name, phone: patient.phone, birth: patient.birth, doctor_id: doctorId, doctor_name: doctorName || null, clinic_name: clinicName || null, appointment_date: date, period, appointment_time: appointmentTime, date, time: appointmentTime, queue_number: queue.count + 1, people_ahead: queue.count, type, status: "مؤكد" }).select("*").single();
   if (appointment.error) return res.status(500).json({ error: `تعذر حفظ الموعد: ${appointment.error.message}` });
-  let smsSent = false;
-  try {
-    await sendSms(phone, `موعدي: تم حجز موعدك بتاريخ ${date}، الدور رقم ${queue.count + 1}. سيتم تذكيرك عند اقتراب دورك.`);
-    smsSent = true;
-  } catch (error) {
-    console.error("SMS error:", error.message);
-  }
-  res.status(201).json({ appointment: appointment.data, smsSent });
+  res.status(201).json({ appointment: appointment.data });
 });
 
 app.patch("/api/appointments/:id", async (req, res) => {
@@ -166,7 +125,6 @@ app.post("/api/appointments/:id/confirm", async (req, res) => {
     for (const next of waiting.data) {
       await supabase.from("appointments").update({ people_ahead: Math.max(0, Number(next.people_ahead) - 1) }).eq("id", next.id);
     }
-    await sendNearTurnReminders(waiting.data.filter(next => !next.reminder_sent_at && Number(next.people_ahead) - 1 <= 5));
   }
   res.json({ appointment: appointmentForClient(appointment) });
 });
@@ -200,27 +158,7 @@ app.delete("/api/admin/demo", async (_req, res) => {
 
 app.post("/api/reminders/run", async (req, res) => {
   if (req.get("x-cron-secret") !== process.env.REMINDER_CRON_SECRET) return res.status(401).json({ error: "غير مصرح" });
-  const today = new Date().toISOString().slice(0, 10);
-  const { data, error } = await supabase.from("appointments").select("id,patient_id,people_ahead,appointment_date,doctor_id,clinic_name").eq("status", "مؤكد").gte("appointment_date", today).is("reminder_sent_at", null).lte("people_ahead", 5).limit(50);
-  if (error) return res.status(500).json({ error: "تعذر تحميل التذكيرات" });
-  const patientIds = data.map(appointment => appointment.patient_id);
-  const patients = await supabase.from("patients").select("id,name,phone").in("id", patientIds);
-  if (patients.error) return res.status(500).json({ error: "تعذر تحميل بيانات المراجعين للتذكير" });
-  const patientsById = new Map(patients.data.map(patient => [patient.id, patient]));
-  let sent = 0;
-  for (const appointment of data) {
-    try {
-      const patient = patientsById.get(appointment.patient_id);
-      if (!patient?.phone) continue;
-      const text = appointment.people_ahead === 0 ? `موعدي: حان دور ${patient.name} الآن.` : `موعدي: تبقى ${appointment.people_ahead} مراجعين قبل دور ${patient.name}.`;
-      await sendSms(patient.phone, text);
-      await supabase.from("appointments").update({ reminder_sent_at: new Date().toISOString() }).eq("id", appointment.id);
-      sent += 1;
-    } catch (error) {
-      console.error("Reminder error:", error.message);
-    }
-  }
-  res.json({ sent });
+  res.json({ sent: 0, disabled: true, message: "تم إيقاف إرسال الرسائل حتى ربط المزود الجديد" });
 });
 
 app.listen(port, () => console.log(`Maw3idi server listening on ${port}`));
