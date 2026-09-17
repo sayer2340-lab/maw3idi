@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: maw3idi
+    name: maw3idi-clinic
     runtime: node
     buildCommand: npm install
     startCommand: npm start
